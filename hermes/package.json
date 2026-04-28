@@ -1,0 +1,17 @@
+{
+  "name": "mediabrain-hermes-executor",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "dev": "ts-node src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3"
+  }
+}

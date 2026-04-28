@@ -1,0 +1,39 @@
+services:
+  app:
+    container_name: mediabrain_ai_api_42180
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    env_file:
+      - ./config/.env
+    environment:
+      PORT: 42180
+    ports:
+      - "42180:42180"
+    depends_on:
+      - ai
+      - hermes
+
+  ai:
+    container_name: mediabrain_ai_service_42181
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    env_file:
+      - ./config/.env
+    environment:
+      PORT: 42181
+    ports:
+      - "42181:42181"
+
+  hermes:
+    container_name: mediabrain_hermes_executor_42182
+    build:
+      context: ./hermes
+      dockerfile: Dockerfile
+    env_file:
+      - ./config/.env
+    environment:
+      PORT: 42182
+    ports:
+      - "42182:42182"

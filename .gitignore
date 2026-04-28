@@ -1,0 +1,8 @@
+node_modules/
+npm-debug.log*
+dist/
+downloads/
+transferred/
+*.log
+.env
+config/.env
