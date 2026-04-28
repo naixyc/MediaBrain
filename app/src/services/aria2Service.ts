@@ -1,8 +1,10 @@
 import { copyFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import type { DownloadTarget } from "../types";
+import type { DownloadProgress, DownloadTarget } from "../types";
 
 type Aria2Status = "active" | "waiting" | "paused" | "error" | "complete" | "removed";
+
+type DownloadProgressHandler = (progress: DownloadProgress) => void;
 
 interface Aria2Response<T> {
   id: string;
@@ -49,7 +51,11 @@ export class Aria2Service {
     return gids;
   }
 
-  async waitForDownloads(gids: string[], downloads: DownloadTarget[]): Promise<string[]> {
+  async waitForDownloads(
+    gids: string[],
+    downloads: DownloadTarget[],
+    onProgress?: DownloadProgressHandler
+  ): Promise<string[]> {
     if (!this.rpcUrl) {
       for (const download of downloads) {
         await mkdir(download.dir, { recursive: true });
@@ -60,6 +66,23 @@ export class Aria2Service {
       }
 
       await new Promise((resolve) => setTimeout(resolve, 500));
+      gids.forEach((gid, index) => {
+        const download = downloads[index];
+        if (!download) {
+          return;
+        }
+
+        onProgress?.({
+          gid,
+          sourcePath: download.sourcePath,
+          outputPath: download.outputPath,
+          status: "complete",
+          totalLength: 0,
+          completedLength: 0,
+          downloadSpeed: 0,
+          progress: 100
+        });
+      });
       console.log(`[Aria2Service] mock downloads completed: ${gids.join(", ")}`);
       return downloads.map((download) => download.outputPath);
     }
@@ -73,12 +96,30 @@ export class Aria2Service {
       }
 
       for (const gid of Array.from(pending)) {
-        const status = await this.call<{ status: Aria2Status; errorMessage?: string }>(
+        const status = await this.call<{
+          status: Aria2Status;
+          errorMessage?: string;
+          totalLength?: string;
+          completedLength?: string;
+          downloadSpeed?: string;
+        }>(
           "aria2.tellStatus",
-          [gid, ["status", "errorMessage"]]
+          [gid, ["status", "errorMessage", "totalLength", "completedLength", "downloadSpeed"]]
         );
 
         console.log(`[Aria2Service] gid ${gid} status: ${status.status}`);
+        const download = downloads[gids.indexOf(gid)];
+        if (download) {
+          onProgress?.(
+            createDownloadProgress(gid, download, {
+              status: status.status,
+              errorMessage: status.errorMessage,
+              totalLength: status.totalLength,
+              completedLength: status.completedLength,
+              downloadSpeed: status.downloadSpeed
+            })
+          );
+        }
 
         if (status.status === "complete") {
           pending.delete(gid);
@@ -129,4 +170,33 @@ export class Aria2Service {
 
     return body.result;
   }
+}
+
+function createDownloadProgress(
+  gid: string,
+  download: DownloadTarget,
+  status: {
+    status: string;
+    errorMessage?: string;
+    totalLength?: string;
+    completedLength?: string;
+    downloadSpeed?: string;
+  }
+): DownloadProgress {
+  const totalLength = Number(status.totalLength || 0);
+  const completedLength = Number(status.completedLength || 0);
+  const downloadSpeed = Number(status.downloadSpeed || 0);
+  const progress = totalLength > 0 ? Math.min(100, (completedLength / totalLength) * 100) : 0;
+
+  return {
+    gid,
+    sourcePath: download.sourcePath,
+    outputPath: download.outputPath,
+    status: status.status,
+    totalLength,
+    completedLength,
+    downloadSpeed,
+    progress,
+    errorMessage: status.errorMessage
+  };
 }

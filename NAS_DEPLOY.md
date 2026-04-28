@@ -123,12 +123,24 @@ mediabrain_ai_service_42181   http://192.168.1.35:42181
 mediabrain_hermes_executor_42182
 ```
 
+Web UI 地址：
+
+```text
+http://192.168.1.35:42180/ui
+```
+
 ## 7. 验证服务
 
 验证 API：
 
 ```bash
 curl http://127.0.0.1:42180/
+```
+
+浏览器打开：
+
+```text
+http://192.168.1.35:42180/ui
 ```
 
 验证小雅：

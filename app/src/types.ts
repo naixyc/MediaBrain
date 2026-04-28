@@ -38,6 +38,18 @@ export interface DownloadTarget {
   headers?: string[];
 }
 
+export interface DownloadProgress {
+  gid: string;
+  sourcePath: string;
+  outputPath: string;
+  status: string;
+  totalLength: number;
+  completedLength: number;
+  downloadSpeed: number;
+  progress: number;
+  errorMessage?: string;
+}
+
 export type TaskStatus =
   | "等待选择资源"
   | "已选择资源"
@@ -55,6 +67,7 @@ export interface TaskSnapshot {
   videoTargetPath?: string;
   subtitleTargetPaths?: string[];
   downloadPaths?: string[];
+  downloadProgress?: DownloadProgress[];
   finalVideoPath?: string;
   finalSubtitlePaths?: string[];
   error?: string;

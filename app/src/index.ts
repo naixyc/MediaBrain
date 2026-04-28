@@ -9,6 +9,7 @@ import { TaskOrchestrator } from "./services/taskOrchestrator";
 import { TransferService } from "./services/transferService";
 import { XiaoyaService } from "./services/xiaoyaService";
 import { readJsonBody, sendJson, sendNoContent } from "./http";
+import { renderUiPage } from "./uiPage";
 
 const port = Number(process.env.PORT ?? process.env.APP_PORT ?? 42180);
 const openListService = new OpenListService();
@@ -47,6 +48,7 @@ const server = createServer(async (request, response) => {
         service: "MediaBrain API",
         status: "ok",
         endpoints: [
+          "GET /ui",
           "POST /task/create",
           "GET /task/:taskId",
           "GET /tasks",
@@ -56,6 +58,13 @@ const server = createServer(async (request, response) => {
           "POST /resources/select"
         ]
       });
+      return;
+    }
+
+    if (request.method === "GET" && (url.pathname === "/ui" || url.pathname === "/ui/")) {
+      response.statusCode = 200;
+      response.setHeader("Content-Type", "text/html; charset=utf-8");
+      response.end(renderUiPage());
       return;
     }
 

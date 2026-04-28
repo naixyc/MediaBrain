@@ -7,6 +7,7 @@ import type { HermesClient } from "./hermesClient";
 import type { MediaResourceService } from "./mediaResourceService";
 import type { TransferService } from "./transferService";
 import type {
+  DownloadProgress,
   DownloadTarget,
   ResourceSearchItem,
   ResourceWithSubtitles,
@@ -25,6 +26,7 @@ interface MediaTask {
   videoTargetPath?: string;
   subtitleTargetPaths?: string[];
   downloadPaths?: string[];
+  downloadProgress?: DownloadProgress[];
   finalVideoPath?: string;
   finalSubtitlePaths?: string[];
   error?: string;
@@ -161,9 +163,22 @@ export class TaskOrchestrator {
 
     this.updateStatus(task, "下载中");
     const gids = await this.aria2Service.addDownloads(downloadTargets);
+    task.downloadProgress = gids.map((gid, index) => ({
+      gid,
+      sourcePath: downloadTargets[index]?.sourcePath || "",
+      outputPath: downloadTargets[index]?.outputPath || "",
+      status: "waiting",
+      totalLength: 0,
+      completedLength: 0,
+      downloadSpeed: 0,
+      progress: 0
+    }));
     console.log(`[TaskOrchestrator] task ${task.taskId} aria2 gids: ${gids.join(", ")}`);
 
-    const downloadPaths = await this.aria2Service.waitForDownloads(gids, downloadTargets);
+    const downloadPaths = await this.aria2Service.waitForDownloads(gids, downloadTargets, (progress) => {
+      task.downloadProgress = mergeDownloadProgress(task.downloadProgress || [], progress);
+      task.updatedAt = new Date().toISOString();
+    });
     task.downloadPaths = downloadPaths;
     console.log(
       `[TaskOrchestrator] task ${task.taskId} downloads completed: ${downloadPaths.join(", ")}`
@@ -244,6 +259,7 @@ export class TaskOrchestrator {
       videoTargetPath: task.videoTargetPath,
       subtitleTargetPaths: task.subtitleTargetPaths,
       downloadPaths: task.downloadPaths,
+      downloadProgress: task.downloadProgress,
       finalVideoPath: task.finalVideoPath,
       finalSubtitlePaths: task.finalSubtitlePaths,
       error: task.error,
@@ -251,4 +267,13 @@ export class TaskOrchestrator {
       updatedAt: task.updatedAt
     };
   }
+}
+
+function mergeDownloadProgress(
+  current: DownloadProgress[],
+  next: DownloadProgress
+): DownloadProgress[] {
+  const map = new Map(current.map((item) => [item.gid, item]));
+  map.set(next.gid, next);
+  return Array.from(map.values());
 }
