@@ -110,10 +110,12 @@ docker-compose.nas.yml
 
 ```bash
 cd /vol1/1000/docker/mediabrain-ai
-docker compose -f docker-compose.nas.yml up -d --build
+DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose -f docker-compose.nas.yml up -d --build
 ```
 
 飞牛 Docker Compose 页面也可以直接选择这个项目目录，并使用 `docker-compose.nas.yml` 的内容部署。
+
+飞牛的 Docker 镜像源有时会在 BuildKit 解析 `node:22-alpine` metadata 时返回 `401 Unauthorized` 或超时。上面的 `DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0` 会使用经典构建器，优先复用 NAS 本地已有的基础镜像。
 
 部署完成后会启动：
 
@@ -223,7 +225,7 @@ docker compose -f docker-compose.nas.yml restart
 
 ```bash
 git pull
-docker compose -f docker-compose.nas.yml up -d --build
+DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose -f docker-compose.nas.yml up -d --build
 ```
 
 停止：
