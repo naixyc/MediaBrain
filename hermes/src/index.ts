@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
-import { mkdir, rename } from "node:fs/promises";
+import { copyFile, mkdir, rename, unlink } from "node:fs/promises";
 import * as path from "node:path";
 
 const port = Number(process.env.PORT ?? process.env.HERMES_PORT ?? 42182);
@@ -72,7 +72,7 @@ async function renameMedia(request: RenameRequest): Promise<string> {
   }
 
   await mkdir(path.dirname(request.toPath), { recursive: true });
-  await rename(request.fromPath, request.toPath);
+  await moveFile(request.fromPath, request.toPath);
 
   const subtitleTargets = createSubtitleTargetPaths(request.toPath, subtitlePaths);
   for (let index = 0; index < subtitlePaths.length; index += 1) {
@@ -84,10 +84,33 @@ async function renameMedia(request: RenameRequest): Promise<string> {
     }
 
     await mkdir(path.dirname(subtitleTarget), { recursive: true });
-    await rename(subtitlePath, subtitleTarget);
+    await moveFile(subtitlePath, subtitleTarget);
   }
 
   return "filesystem";
+}
+
+async function moveFile(fromPath: string, toPath: string): Promise<void> {
+  try {
+    await rename(fromPath, toPath);
+    return;
+  } catch (error) {
+    if (!isCrossDeviceMoveError(error)) {
+      throw error;
+    }
+  }
+
+  await copyFile(fromPath, toPath);
+  await unlink(fromPath);
+}
+
+function isCrossDeviceMoveError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "EXDEV"
+  );
 }
 
 function createSubtitleTargetPaths(videoTargetPath: string, subtitlePaths: string[]): string[] {
