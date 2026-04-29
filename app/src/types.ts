@@ -31,6 +31,7 @@ export interface ResourceSearchItem {
   id: string;
   name: string;
   size: string;
+  sizeBytes: number;
   source: string;
   kind: ResourceSelectionKind;
   videosCount: number;

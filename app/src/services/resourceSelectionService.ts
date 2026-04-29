@@ -27,15 +27,20 @@ export class ResourceSelectionService {
 
     console.log(`[ResourceSelectionService] selectable video resources: ${groupedResources.length}`);
 
-    return groupedResources.map((resource) => ({
-      id: resource.id,
-      name: resource.name,
-      size: formatFileSize(sumResourceSizes([...resource.videos, ...resource.subtitles])),
-      source: resource.source,
-      kind: resource.kind,
-      videosCount: resource.videos.length,
-      subtitlesCount: resource.subtitles.length
-    }));
+    return groupedResources.map((resource) => {
+      const sizeBytes = sumResourceSizes([...resource.videos, ...resource.subtitles]);
+
+      return {
+        id: resource.id,
+        name: resource.name,
+        size: formatFileSize(sizeBytes),
+        sizeBytes,
+        source: resource.source,
+        kind: resource.kind,
+        videosCount: resource.videos.length,
+        subtitlesCount: resource.subtitles.length
+      };
+    });
   }
 
   getSelection(resourceId: string): ResourceWithSubtitles | null {

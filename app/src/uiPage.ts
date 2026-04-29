@@ -330,6 +330,39 @@ export function renderUiPage(): string {
       overflow-wrap: anywhere;
     }
 
+    .task-summary {
+      display: grid;
+      gap: 7px;
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+
+    .summary-row,
+    .progress-file-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .summary-main {
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .summary-side {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
     .download-progress {
       display: grid;
       gap: 8px;
@@ -338,7 +371,36 @@ export function renderUiPage(): string {
 
     .progress-line {
       display: grid;
-      gap: 6px;
+      gap: 7px;
+      padding: 9px 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .progress-line.active {
+      border-color: #bfdbfe;
+      background: #f8fbff;
+    }
+
+    .progress-line.complete {
+      border-color: #bbf7d0;
+      background: #f7fff9;
+    }
+
+    .progress-line.error {
+      border-color: #fecaca;
+      background: #fff7f7;
+    }
+
+    .progress-file-name {
+      min-width: 0;
+      color: #172033;
+      font-size: 12px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .progress-meta {
@@ -347,6 +409,27 @@ export function renderUiPage(): string {
       gap: 10px;
       color: var(--muted);
       font-size: 12px;
+    }
+
+    .progress-muted {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .progress-toggle {
+      width: 100%;
+      min-height: 32px;
+      border-radius: 8px;
+      background: #f1f5f9;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+      transition: background 160ms ease;
+    }
+
+    .progress-toggle:hover {
+      background: #e2e8f0;
     }
 
     .progress-bar {
@@ -497,6 +580,21 @@ export function renderUiPage(): string {
         width: 100%;
         justify-content: flex-start;
       }
+
+      .summary-row,
+      .progress-file-row,
+      .progress-meta {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .summary-side {
+        white-space: normal;
+      }
+
+      .progress-file-name {
+        white-space: normal;
+      }
     }
   </style>
 </head>
@@ -581,6 +679,7 @@ export function renderUiPage(): string {
         currentCandidates: [],
         hasSearched: false,
         tasks: [],
+        expandedTasks: {},
         errors: [],
         polling: null,
         searching: false,
@@ -698,6 +797,100 @@ export function renderUiPage(): string {
         return size.toFixed(precision) + " " + units[index];
       }
 
+      function getSelectedCandidate(task) {
+        if (!task || !task.selectedResourceId) return null;
+        return (task.candidates || []).find(function (candidate) {
+          return candidate.id === task.selectedResourceId;
+        }) || null;
+      }
+
+      function getFileName(filePath) {
+        var raw = String(filePath || "");
+        var normalized = raw.replace(/\\\\/g, "/");
+        var name = normalized.slice(normalized.lastIndexOf("/") + 1) || raw || "\u672a\u77e5\u6587\u4ef6";
+        try {
+          return decodeURIComponent(name);
+        } catch (error) {
+          return name;
+        }
+      }
+
+      function progressStatusLabel(status) {
+        if (status === "active") return "\u4e0b\u8f7d\u4e2d";
+        if (status === "waiting") return "\u7b49\u5f85";
+        if (status === "paused") return "\u6682\u505c";
+        if (status === "complete") return "\u5b8c\u6210";
+        if (status === "error") return "\u9519\u8bef";
+        if (status === "removed") return "\u5df2\u79fb\u9664";
+        return status || "\u672a\u77e5";
+      }
+
+      function progressStatusClass(status) {
+        if (status === "active") return "active";
+        if (status === "complete") return "complete";
+        if (status === "error" || status === "removed") return "error";
+        return "";
+      }
+
+      function progressPillClass(status) {
+        if (status === "active") return "blue";
+        if (status === "complete") return "green";
+        if (status === "error" || status === "removed") return "red";
+        if (status === "paused") return "amber";
+        return "";
+      }
+
+      function isInterestingProgress(progress) {
+        if (!progress) return false;
+        if (progress.status !== "waiting") return true;
+        return Number(progress.completedLength || 0) > 0 || Number(progress.downloadSpeed || 0) > 0;
+      }
+
+      function summarizeProgress(progressItems, selectedCandidate) {
+        var items = Array.isArray(progressItems) ? progressItems : [];
+        var totalFiles = items.length;
+        var completedFiles = items.filter(function (item) {
+          return item.status === "complete" || Number(item.progress || 0) >= 100;
+        }).length;
+        var activeFiles = items.filter(function (item) {
+          return item.status === "active" || Number(item.downloadSpeed || 0) > 0;
+        }).length;
+        var waitingFiles = items.filter(function (item) {
+          return item.status === "waiting";
+        }).length;
+        var failedFiles = items.filter(function (item) {
+          return item.status === "error" || item.status === "removed";
+        }).length;
+        var completedBytes = items.reduce(function (total, item) {
+          return total + Number(item.completedLength || 0);
+        }, 0);
+        var knownTotalBytes = items.reduce(function (total, item) {
+          return total + Number(item.totalLength || 0);
+        }, 0);
+        var selectedTotalBytes = Number(selectedCandidate && selectedCandidate.sizeBytes || 0);
+        var totalBytes = Math.max(knownTotalBytes, selectedTotalBytes);
+        var speed = items.reduce(function (total, item) {
+          return total + Number(item.downloadSpeed || 0);
+        }, 0);
+        var percent = totalBytes > 0
+          ? Math.min(100, completedBytes / totalBytes * 100)
+          : totalFiles > 0
+            ? completedFiles / totalFiles * 100
+            : 0;
+
+        return {
+          totalFiles: totalFiles,
+          completedFiles: completedFiles,
+          activeFiles: activeFiles,
+          waitingFiles: waitingFiles,
+          failedFiles: failedFiles,
+          completedBytes: completedBytes,
+          totalBytes: totalBytes,
+          speed: speed,
+          percent: Math.max(0, Math.min(100, percent))
+        };
+      }
+
       function selectionKindLabel(kind) {
         if (kind === "collection") return "\u5168\u96c6";
         if (kind === "season") return "\u6574\u5b63";
@@ -745,6 +938,80 @@ export function renderUiPage(): string {
         }).join("");
       }
 
+      function renderProgressLine(progress) {
+        var percent = Math.max(0, Math.min(100, Number(progress.progress || 0)));
+        var speed = formatBytes(progress.downloadSpeed) + "/s";
+        var totalText = Number(progress.totalLength || 0) > 0
+          ? formatBytes(progress.totalLength)
+          : "\u672a\u77e5\u5927\u5c0f";
+        var sizeText = formatBytes(progress.completedLength) + " / " + totalText;
+        var fileName = getFileName(progress.outputPath || progress.sourcePath);
+        var sourceName = getFileName(progress.sourcePath);
+        var sourceMarkup = sourceName && sourceName !== fileName
+          ? '<div class="progress-muted">' + escapeHtml(sourceName) + '</div>'
+          : '';
+        var status = progressStatusLabel(progress.status);
+        var statusClassName = progressStatusClass(progress.status);
+        var pillClassName = progressPillClass(progress.status);
+        var className = "progress-line" + (statusClassName ? " " + statusClassName : "");
+
+        return '<div class="' + className + '">' +
+          '<div class="progress-file-row">' +
+            '<div class="progress-file-name" title="' + escapeHtml(fileName) + '">' + escapeHtml(fileName) + '</div>' +
+            '<span class="pill ' + pillClassName + '">' + escapeHtml(status) + '</span>' +
+          '</div>' +
+          sourceMarkup +
+          '<div class="progress-meta"><span>' + escapeHtml(speed) + '</span><span>' + escapeHtml(sizeText) + '</span></div>' +
+          '<div class="progress-bar"><div class="progress-fill" style="width: ' + percent.toFixed(2) + '%"></div></div>' +
+        '</div>';
+      }
+
+      function renderDownloadProgress(task, progressItems, selectedCandidate) {
+        if (!Array.isArray(progressItems) || !progressItems.length) {
+          return "";
+        }
+
+        var expanded = Boolean(state.expandedTasks[task.taskId]);
+        var visibleItems = progressItems;
+        if (!expanded && progressItems.length > 8) {
+          visibleItems = progressItems.filter(isInterestingProgress).slice(0, 8);
+          if (!visibleItems.length) {
+            visibleItems = progressItems.slice(0, 3);
+          }
+        }
+
+        var hiddenCount = Math.max(0, progressItems.length - visibleItems.length);
+        var summary = summarizeProgress(progressItems, selectedCandidate);
+        var summaryBits = [
+          summary.completedFiles + "/" + summary.totalFiles + " \u4e2a\u6587\u4ef6"
+        ];
+        if (summary.activeFiles) summaryBits.push(summary.activeFiles + " \u4e2a\u4e0b\u8f7d\u4e2d");
+        if (summary.waitingFiles) summaryBits.push(summary.waitingFiles + " \u4e2a\u7b49\u5f85");
+        if (summary.failedFiles) summaryBits.push(summary.failedFiles + " \u4e2a\u5931\u8d25");
+
+        var totalText = summary.totalBytes > 0 ? formatBytes(summary.totalBytes) : "\u672a\u77e5\u5927\u5c0f";
+        var toggleMarkup = "";
+        if (hiddenCount > 0 || expanded) {
+          toggleMarkup = '<button class="progress-toggle" type="button" data-toggle-task="' + escapeHtml(task.taskId) + '">' +
+            (expanded
+              ? "\u6536\u8d77\u6587\u4ef6\u5217\u8868"
+              : "\u5c55\u5f00\u5168\u90e8 " + progressItems.length + " \u4e2a\u6587\u4ef6") +
+          '</button>';
+        }
+
+        return '<div class="task-summary">' +
+          '<div class="summary-row">' +
+            '<div class="summary-main">' + escapeHtml(summaryBits.join(" · ")) + '</div>' +
+            '<div class="summary-side">' + escapeHtml(formatBytes(summary.speed) + "/s · " + formatBytes(summary.completedBytes) + " / " + totalText) + '</div>' +
+          '</div>' +
+          '<div class="progress-bar"><div class="progress-fill" style="width: ' + summary.percent.toFixed(2) + '%"></div></div>' +
+        '</div>' +
+        '<div class="download-progress">' +
+          visibleItems.map(renderProgressLine).join("") +
+          toggleMarkup +
+        '</div>';
+      }
+
       function renderTasks() {
         var tasks = state.tasks.filter(function (task) {
           return task.selectedResourceId || task.status !== STATUS_WAITING;
@@ -759,26 +1026,9 @@ export function renderUiPage(): string {
 
         els.taskList.innerHTML = tasks.map(function (task) {
           var displayStatus = downloadStatus(task);
-          var progressMarkup = "";
-          if (Array.isArray(task.downloadProgress) && task.downloadProgress.length) {
-            progressMarkup = '<div class="download-progress">' + task.downloadProgress.map(function (progress) {
-              var percent = Math.max(0, Math.min(100, Number(progress.progress || 0)));
-              var speed = formatBytes(progress.downloadSpeed) + "/s";
-              var sizeText = formatBytes(progress.completedLength) + " / " + formatBytes(progress.totalLength);
-              return '<div class="progress-line">' +
-                '<div class="progress-meta"><span>' + escapeHtml(progress.status) + '</span><span>' + escapeHtml(speed + " · " + sizeText) + '</span></div>' +
-                '<div class="progress-bar"><div class="progress-fill" style="width: ' + percent.toFixed(2) + '%"></div></div>' +
-              '</div>';
-            }).join("") + '</div>';
-          }
-
-          var selected = "";
-          if (task.selectedResourceId) {
-            var matched = (task.candidates || []).find(function (candidate) {
-              return candidate.id === task.selectedResourceId;
-            });
-            selected = matched ? matched.name : task.selectedResourceId;
-          }
+          var selectedCandidate = getSelectedCandidate(task);
+          var selected = selectedCandidate ? selectedCandidate.name : task.selectedResourceId || "";
+          var progressMarkup = renderDownloadProgress(task, task.downloadProgress || [], selectedCandidate);
 
           return '<article class="task-item">' +
             '<div class="task-head">' +
@@ -1024,6 +1274,17 @@ export function renderUiPage(): string {
         var button = target.closest("[data-resource-id]");
         if (!button) return;
         selectResource(button.getAttribute("data-resource-id"));
+      });
+
+      els.taskList.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        var button = target.closest("[data-toggle-task]");
+        if (!button) return;
+        var taskId = button.getAttribute("data-toggle-task");
+        if (!taskId) return;
+        state.expandedTasks[taskId] = !state.expandedTasks[taskId];
+        renderTasks();
       });
 
       els.refreshTasks.addEventListener("click", function () {

@@ -279,15 +279,20 @@ export class TaskOrchestrator {
   }
 
   private createCandidateItems(candidateGroups: ResourceWithSubtitles[]): ResourceSearchItem[] {
-    return candidateGroups.map((group) => ({
-      id: group.id,
-      name: group.name,
-      size: formatFileSize(sumResourceSizes([...group.videos, ...group.subtitles])),
-      source: group.source,
-      kind: group.kind,
-      videosCount: group.videos.length,
-      subtitlesCount: group.subtitles.length
-    }));
+    return candidateGroups.map((group) => {
+      const sizeBytes = sumResourceSizes([...group.videos, ...group.subtitles]);
+
+      return {
+        id: group.id,
+        name: group.name,
+        size: formatFileSize(sizeBytes),
+        sizeBytes,
+        source: group.source,
+        kind: group.kind,
+        videosCount: group.videos.length,
+        subtitlesCount: group.subtitles.length
+      };
+    });
   }
 
   private resolveTaskForSelection(taskId: string | undefined, resourceId: string): MediaTask {
