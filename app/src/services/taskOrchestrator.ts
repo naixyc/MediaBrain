@@ -68,17 +68,37 @@ export class TaskOrchestrator {
     const resources = await this.mediaResourceService.searchAll(normalizedKeyword);
     const candidateGroups = groupResourcesWithSubtitles(resources);
     task.candidateGroups = candidateGroups;
-    task.candidates = candidateGroups.map((group) => ({
-      id: group.video.id,
-      name: group.video.name,
-      size: formatFileSize(group.video.size),
-      source: group.video.source,
-      subtitlesCount: group.subtitles.length
-    }));
+    task.candidates = this.createCandidateItems(candidateGroups);
     task.updatedAt = new Date().toISOString();
 
     console.log(
       `[TaskOrchestrator] task ${task.taskId} created with ${task.candidates.length} candidates`
+    );
+
+    return this.toSnapshot(task);
+  }
+
+  createTaskFromSelection(keyword: string | undefined, selectedResource: ResourceWithSubtitles): TaskSnapshot {
+    const normalizedKeyword = (keyword || selectedResource.video.name).trim();
+    if (!normalizedKeyword) {
+      throw new Error("keyword is required");
+    }
+
+    const task: MediaTask = {
+      taskId: randomUUID(),
+      keyword: normalizedKeyword,
+      status: "等待选择资源",
+      candidateGroups: [selectedResource],
+      candidates: this.createCandidateItems([selectedResource]),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    this.tasks.set(task.taskId, task);
+    this.startSelectedTask(task, selectedResource);
+
+    console.log(
+      `[TaskOrchestrator] task ${task.taskId} created from selected resource ${selectedResource.video.name}`
     );
 
     return this.toSnapshot(task);
@@ -96,19 +116,7 @@ export class TaskOrchestrator {
       throw new Error(`resource ${resourceId} not found in task ${task.taskId}`);
     }
 
-    task.selectedResourceId = resourceId;
-    task.selectedResource = selectedResource;
-    this.updateStatus(task, "已选择资源");
-
-    task.pipeline = this.deferPipeline(task.taskId).catch((error) => {
-      const currentTask = this.tasks.get(task.taskId);
-      if (!currentTask) {
-        return;
-      }
-
-      currentTask.error = error instanceof Error ? error.message : String(error);
-      this.updateStatus(currentTask, "失败");
-    });
+    this.startSelectedTask(task, selectedResource);
 
     return this.toSnapshot(task);
   }
@@ -210,6 +218,32 @@ export class TaskOrchestrator {
         this.runPipeline(taskId).then(resolve, reject);
       }, 0);
     });
+  }
+
+  private startSelectedTask(task: MediaTask, selectedResource: ResourceWithSubtitles): void {
+    task.selectedResourceId = selectedResource.video.id;
+    task.selectedResource = selectedResource;
+    this.updateStatus(task, "已选择资源");
+
+    task.pipeline = this.deferPipeline(task.taskId).catch((error) => {
+      const currentTask = this.tasks.get(task.taskId);
+      if (!currentTask) {
+        return;
+      }
+
+      currentTask.error = error instanceof Error ? error.message : String(error);
+      this.updateStatus(currentTask, "失败");
+    });
+  }
+
+  private createCandidateItems(candidateGroups: ResourceWithSubtitles[]): ResourceSearchItem[] {
+    return candidateGroups.map((group) => ({
+      id: group.video.id,
+      name: group.video.name,
+      size: formatFileSize(group.video.size),
+      source: group.video.source,
+      subtitlesCount: group.subtitles.length
+    }));
   }
 
   private resolveTaskForSelection(taskId: string | undefined, resourceId: string): MediaTask {

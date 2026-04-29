@@ -604,6 +604,9 @@ export function renderUiPage(): string {
       var state = {
         currentTaskId: null,
         currentTask: null,
+        currentKeyword: "",
+        currentCandidates: [],
+        hasSearched: false,
         tasks: [],
         errors: [],
         polling: null,
@@ -627,7 +630,13 @@ export function renderUiPage(): string {
         clearErrors: document.getElementById("clearErrors")
       };
 
-      var activeStatuses = ["已选择资源", "转存中", "下载中"];
+      var STATUS_WAITING = "\u7b49\u5f85\u9009\u62e9\u8d44\u6e90";
+      var STATUS_SELECTED = "\u5df2\u9009\u62e9\u8d44\u6e90";
+      var STATUS_TRANSFERRING = "\u8f6c\u5b58\u4e2d";
+      var STATUS_DOWNLOADING = "\u4e0b\u8f7d\u4e2d";
+      var STATUS_DONE = "\u5df2\u5b8c\u6210";
+      var STATUS_FAILED = "\u5931\u8d25";
+      var activeStatuses = [STATUS_SELECTED, STATUS_TRANSFERRING, STATUS_DOWNLOADING];
 
       function escapeHtml(value) {
         return String(value == null ? "" : value)
@@ -668,19 +677,19 @@ export function renderUiPage(): string {
       }
 
       function statusClass(status) {
-        if (status === "已完成") return "green";
-        if (status === "失败") return "red";
-        if (status === "下载中") return "blue";
-        if (status === "转存中" || status === "已选择资源") return "amber";
+        if (status === STATUS_DONE) return "green";
+        if (status === STATUS_FAILED) return "red";
+        if (status === STATUS_DOWNLOADING) return "blue";
+        if (status === STATUS_TRANSFERRING || status === STATUS_SELECTED) return "amber";
         return "violet";
       }
 
       function stageCount(status) {
-        if (status === "已完成") return 4;
-        if (status === "下载中") return 3;
-        if (status === "转存中") return 2;
-        if (status === "已选择资源") return 1;
-        if (status === "失败") return 4;
+        if (status === STATUS_DONE) return 4;
+        if (status === STATUS_DOWNLOADING) return 3;
+        if (status === STATUS_TRANSFERRING) return 2;
+        if (status === STATUS_SELECTED) return 1;
+        if (status === STATUS_FAILED) return 4;
         return 0;
       }
 
@@ -704,18 +713,19 @@ export function renderUiPage(): string {
         return size.toFixed(precision) + " " + units[index];
       }
 
-      function renderCandidates(task) {
-        var candidates = task && Array.isArray(task.candidates) ? task.candidates : [];
+      function renderCandidates() {
+        var candidates = Array.isArray(state.currentCandidates) ? state.currentCandidates : [];
+        var selectedId = state.currentTask && state.currentTask.selectedResourceId;
         els.candidateCount.textContent = candidates.length + " 个候选";
 
         if (!candidates.length) {
-          els.resultList.innerHTML = '<div class="empty">没有候选资源</div>';
+          els.resultList.innerHTML = '<div class="empty">' + (state.hasSearched ? "没有候选资源" : "等待搜索") + '</div>';
           return;
         }
 
         els.resultList.innerHTML = candidates.map(function (item) {
-          var disabled = state.selectingId || (task.status !== "等待选择资源" && task.selectedResourceId);
-          var isSelected = task.selectedResourceId === item.id;
+          var disabled = state.selectingId || selectedId;
+          var isSelected = selectedId === item.id || state.selectingId === item.id;
           var buttonText = isSelected ? "已选择" : "选择";
           return '<article class="row">' +
             '<div>' +
@@ -733,12 +743,14 @@ export function renderUiPage(): string {
       }
 
       function renderTasks() {
-        var tasks = state.tasks.slice().sort(function (a, b) {
+        var tasks = state.tasks.filter(function (task) {
+          return task.selectedResourceId || task.status !== STATUS_WAITING;
+        }).sort(function (a, b) {
           return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
         });
 
         if (!tasks.length) {
-          els.taskList.innerHTML = '<div class="empty">暂无任务</div>';
+          els.taskList.innerHTML = '<div class="empty">暂无下载任务</div>';
           return;
         }
 
@@ -787,7 +799,7 @@ export function renderUiPage(): string {
 
       function renderOrganize() {
         var task = state.currentTask || state.tasks.find(function (item) {
-          return item.status === "已完成";
+          return item.status === STATUS_DONE;
         });
 
         if (!task) {
@@ -845,9 +857,7 @@ export function renderUiPage(): string {
       }
 
       function renderAll() {
-        if (state.currentTask) {
-          renderCandidates(state.currentTask);
-        }
+        renderCandidates();
         renderTasks();
         renderOrganize();
         renderErrors();
@@ -865,6 +875,7 @@ export function renderUiPage(): string {
         }
         if (state.currentTaskId === task.taskId) {
           state.currentTask = task;
+          state.currentCandidates = Array.isArray(task.candidates) ? task.candidates : state.currentCandidates;
         }
       }
 
@@ -876,7 +887,10 @@ export function renderUiPage(): string {
               var matched = state.tasks.find(function (task) {
                 return task.taskId === state.currentTaskId;
               });
-              if (matched) state.currentTask = matched;
+              if (matched) {
+                state.currentTask = matched;
+                state.currentCandidates = Array.isArray(matched.candidates) ? matched.candidates : state.currentCandidates;
+              }
             }
             renderAll();
           })
@@ -917,23 +931,22 @@ export function renderUiPage(): string {
         }
       }
 
-      function createTask(keyword) {
+      function searchResources(keyword) {
         setSearchBusy(true);
+        stopPolling();
+        state.currentTaskId = null;
+        state.currentTask = null;
+        state.currentKeyword = keyword;
+        state.currentCandidates = [];
+        state.hasSearched = true;
         els.searchStatus.textContent = "搜索中";
-        return requestJson("/task/create", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ keyword: keyword })
-        })
-          .then(function (task) {
-            state.currentTaskId = task.taskId;
-            state.currentTask = task;
-            syncTask(task);
-            els.searchStatus.textContent = "找到 " + task.candidates.length + " 个候选";
+        renderAll();
+
+        return requestJson("/resources/search?keyword=" + encodeURIComponent(keyword))
+          .then(function (candidates) {
+            state.currentCandidates = Array.isArray(candidates) ? candidates : [];
+            els.searchStatus.textContent = "找到 " + state.currentCandidates.length + " 个候选";
             renderAll();
-            startPolling();
           })
           .catch(function (error) {
             els.searchStatus.textContent = "搜索失败";
@@ -945,9 +958,9 @@ export function renderUiPage(): string {
       }
 
       function selectResource(resourceId) {
-        if (!state.currentTaskId || !resourceId) return;
+        if (!resourceId) return;
         state.selectingId = resourceId;
-        renderCandidates(state.currentTask);
+        renderCandidates();
         return requestJson("/resources/select", {
           method: "POST",
           headers: {
@@ -955,10 +968,14 @@ export function renderUiPage(): string {
           },
           body: JSON.stringify({
             taskId: state.currentTaskId,
-            resourceId: resourceId
+            resourceId: resourceId,
+            keyword: state.currentKeyword || els.keywordInput.value.trim()
           })
         })
           .then(function (task) {
+            state.currentTaskId = task.taskId;
+            state.currentTask = task;
+            state.currentCandidates = Array.isArray(task.candidates) ? task.candidates : state.currentCandidates;
             syncTask(task);
             renderAll();
             startPolling();
@@ -968,7 +985,7 @@ export function renderUiPage(): string {
           })
           .finally(function () {
             state.selectingId = null;
-            renderCandidates(state.currentTask);
+            renderCandidates();
           });
       }
 
@@ -983,7 +1000,7 @@ export function renderUiPage(): string {
           addError("keyword is required");
           return;
         }
-        createTask(keyword);
+        searchResources(keyword);
       });
 
       els.resultList.addEventListener("click", function (event) {

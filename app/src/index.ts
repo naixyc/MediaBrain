@@ -32,6 +32,7 @@ interface CreateTaskRequest {
 interface SelectResourceRequest {
   taskId?: string;
   resourceId?: string;
+  keyword?: string;
 }
 
 const server = createServer(async (request, response) => {
@@ -123,6 +124,7 @@ const server = createServer(async (request, response) => {
       const body = await readJsonBody<SelectResourceRequest>(request);
       const taskId = body.taskId?.trim();
       const resourceId = body.resourceId?.trim();
+      const keyword = body.keyword?.trim();
 
       if (!resourceId) {
         sendJson(response, 400, { error: "resourceId is required" });
@@ -132,7 +134,14 @@ const server = createServer(async (request, response) => {
       console.log(`[ResourcesAPI] selected resource: ${resourceId}, task: ${taskId || "<auto>"}`);
       let task;
       try {
-        task = taskOrchestrator.selectResource(taskId, resourceId);
+        if (taskId) {
+          task = taskOrchestrator.selectResource(taskId, resourceId);
+        } else {
+          const selection = resourceSelectionService.getSelection(resourceId);
+          task = selection
+            ? taskOrchestrator.createTaskFromSelection(keyword, selection)
+            : taskOrchestrator.selectResource(undefined, resourceId);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         sendJson(response, 400, { error: message });
