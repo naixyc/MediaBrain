@@ -10,4 +10,4 @@ COPY src ./src
 
 EXPOSE 42182
 
-CMD ["npm", "start"]
+CMD ["node", "-r", "ts-node/register", "src/index.ts"]
