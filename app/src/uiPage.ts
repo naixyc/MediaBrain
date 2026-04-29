@@ -330,33 +330,6 @@ export function renderUiPage(): string {
       overflow-wrap: anywhere;
     }
 
-    .stage-track {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 6px;
-      margin-top: 12px;
-    }
-
-    .stage {
-      height: 6px;
-      border-radius: 999px;
-      background: #e2e8f0;
-      overflow: hidden;
-      position: relative;
-    }
-
-    .stage.is-on {
-      background: #bfdbfe;
-    }
-
-    .stage.is-on::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: var(--accent);
-      animation: fill 360ms ease-out both;
-    }
-
     .download-progress {
       display: grid;
       gap: 8px;
@@ -634,8 +607,10 @@ export function renderUiPage(): string {
       var STATUS_SELECTED = "\u5df2\u9009\u62e9\u8d44\u6e90";
       var STATUS_TRANSFERRING = "\u8f6c\u5b58\u4e2d";
       var STATUS_DOWNLOADING = "\u4e0b\u8f7d\u4e2d";
+      var STATUS_DOWNLOAD_DONE = "\u4e0b\u8f7d\u5b8c\u6210";
       var STATUS_DONE = "\u5df2\u5b8c\u6210";
       var STATUS_FAILED = "\u5931\u8d25";
+      var STATUS_ORGANIZE_FAILED = "\u6574\u7406\u5931\u8d25";
       var activeStatuses = [STATUS_SELECTED, STATUS_TRANSFERRING, STATUS_DOWNLOADING];
 
       function escapeHtml(value) {
@@ -677,20 +652,30 @@ export function renderUiPage(): string {
       }
 
       function statusClass(status) {
-        if (status === STATUS_DONE) return "green";
-        if (status === STATUS_FAILED) return "red";
+        if (status === STATUS_DONE || status === STATUS_DOWNLOAD_DONE) return "green";
+        if (status === STATUS_FAILED || status === STATUS_ORGANIZE_FAILED) return "red";
         if (status === STATUS_DOWNLOADING) return "blue";
         if (status === STATUS_TRANSFERRING || status === STATUS_SELECTED) return "amber";
         return "violet";
       }
 
-      function stageCount(status) {
-        if (status === STATUS_DONE) return 4;
-        if (status === STATUS_DOWNLOADING) return 3;
-        if (status === STATUS_TRANSFERRING) return 2;
-        if (status === STATUS_SELECTED) return 1;
-        if (status === STATUS_FAILED) return 4;
-        return 0;
+      function isDownloadComplete(task) {
+        if (Array.isArray(task.downloadPaths) && task.downloadPaths.length) {
+          return true;
+        }
+
+        var progressItems = Array.isArray(task.downloadProgress) ? task.downloadProgress : [];
+        return progressItems.length > 0 && progressItems.every(function (progress) {
+          return progress.status === "complete" || Number(progress.progress || 0) >= 100;
+        });
+      }
+
+      function downloadStatus(task) {
+        return isDownloadComplete(task) ? STATUS_DOWNLOAD_DONE : task.status;
+      }
+
+      function organizeStatus(task) {
+        return task.error && isDownloadComplete(task) ? STATUS_ORGANIZE_FAILED : task.status;
       }
 
       function formatDate(value) {
@@ -755,12 +740,7 @@ export function renderUiPage(): string {
         }
 
         els.taskList.innerHTML = tasks.map(function (task) {
-          var count = stageCount(task.status);
-          var stages = "";
-          for (var index = 0; index < 4; index += 1) {
-            stages += '<span class="stage ' + (index < count ? 'is-on' : '') + '"></span>';
-          }
-
+          var displayStatus = downloadStatus(task);
           var progressMarkup = "";
           if (Array.isArray(task.downloadProgress) && task.downloadProgress.length) {
             progressMarkup = '<div class="download-progress">' + task.downloadProgress.map(function (progress) {
@@ -788,9 +768,8 @@ export function renderUiPage(): string {
                 '<div class="task-title">' + escapeHtml(task.keyword) + '</div>' +
                 '<div class="task-sub">' + escapeHtml(selected || task.taskId) + '</div>' +
               '</div>' +
-              '<span class="pill ' + statusClass(task.status) + '">' + escapeHtml(task.status) + '</span>' +
+              '<span class="pill ' + statusClass(displayStatus) + '">' + escapeHtml(displayStatus) + '</span>' +
             '</div>' +
-            '<div class="stage-track">' + stages + '</div>' +
             progressMarkup +
             '<div class="task-sub">' + escapeHtml(formatDate(task.updatedAt)) + '</div>' +
           '</article>';
@@ -809,29 +788,37 @@ export function renderUiPage(): string {
           return;
         }
 
-        els.organizeState.textContent = task.status;
-        els.organizeState.className = "pill " + statusClass(task.status);
+        var displayStatus = organizeStatus(task);
+        els.organizeState.textContent = displayStatus;
+        els.organizeState.className = "pill " + statusClass(displayStatus);
 
-        var paths = [];
-        if (task.videoTargetPath) paths.push("源视频: " + task.videoTargetPath);
+        var items = [];
+        if (task.error) {
+          items.push({
+            type: "error",
+            text: "\u5931\u8d25\u539f\u56e0: " + task.error
+          });
+        }
+        if (task.videoTargetPath) items.push({ type: "path", text: "源视频: " + task.videoTargetPath });
         (task.subtitleTargetPaths || []).forEach(function (path) {
-          paths.push("源字幕: " + path);
+          items.push({ type: "path", text: "源字幕: " + path });
         });
         (task.downloadPaths || []).forEach(function (path) {
-          paths.push("下载: " + path);
+          items.push({ type: "path", text: "下载: " + path });
         });
-        if (task.finalVideoPath) paths.push("整理: " + task.finalVideoPath);
+        if (task.finalVideoPath) items.push({ type: "path", text: "整理: " + task.finalVideoPath });
         (task.finalSubtitlePaths || []).forEach(function (path) {
-          paths.push("整理字幕: " + path);
+          items.push({ type: "path", text: "整理字幕: " + path });
         });
 
-        if (!paths.length) {
+        if (!items.length) {
           els.organizeList.innerHTML = '<div class="empty">暂无整理结果</div>';
           return;
         }
 
-        els.organizeList.innerHTML = paths.map(function (item) {
-          return '<div class="path-item">' + escapeHtml(item) + '</div>';
+        els.organizeList.innerHTML = items.map(function (item) {
+          var className = item.type === "error" ? "error-item" : "path-item";
+          return '<div class="' + className + '">' + escapeHtml(item.text) + '</div>';
         }).join("");
       }
 
