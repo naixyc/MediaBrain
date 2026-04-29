@@ -6,6 +6,14 @@ type Aria2Status = "active" | "waiting" | "paused" | "error" | "complete" | "rem
 
 type DownloadProgressHandler = (progress: DownloadProgress) => void;
 
+interface Aria2TellStatus {
+  status: Aria2Status;
+  errorMessage?: string;
+  totalLength?: string;
+  completedLength?: string;
+  downloadSpeed?: string;
+}
+
 interface Aria2Response<T> {
   id: string;
   jsonrpc: string;
@@ -19,8 +27,12 @@ interface Aria2Response<T> {
 export class Aria2Service {
   private readonly rpcUrl = process.env.ARIA2_RPC_URL;
   private readonly secret = process.env.ARIA2_RPC_SECRET;
-  private readonly pollIntervalMs = Number(process.env.ARIA2_POLL_INTERVAL_MS || 2000);
-  private readonly timeoutMs = Number(process.env.ARIA2_DOWNLOAD_TIMEOUT_MS || 30 * 60 * 1000);
+  private readonly pollIntervalMs = readPositiveInteger(process.env.ARIA2_POLL_INTERVAL_MS, 2000, 250);
+  private readonly noProgressTimeoutMs = readPositiveInteger(
+    process.env.ARIA2_DOWNLOAD_TIMEOUT_MS,
+    30 * 60 * 1000,
+    0
+  );
 
   async addDownloads(downloads: DownloadTarget[]): Promise<string[]> {
     if (!this.rpcUrl) {
@@ -88,21 +100,12 @@ export class Aria2Service {
     }
 
     const pending = new Set(gids);
-    const startedAt = Date.now();
+    const lastCompletedLengthByGid = new Map(gids.map((gid) => [gid, 0]));
+    let lastProgressAt = Date.now();
 
     while (pending.size > 0) {
-      if (Date.now() - startedAt > this.timeoutMs) {
-        throw new Error(`Aria2 download timeout: ${Array.from(pending).join(", ")}`);
-      }
-
       for (const gid of Array.from(pending)) {
-        const status = await this.call<{
-          status: Aria2Status;
-          errorMessage?: string;
-          totalLength?: string;
-          completedLength?: string;
-          downloadSpeed?: string;
-        }>(
+        const status = await this.call<Aria2TellStatus>(
           "aria2.tellStatus",
           [gid, ["status", "errorMessage", "totalLength", "completedLength", "downloadSpeed"]]
         );
@@ -121,6 +124,11 @@ export class Aria2Service {
           );
         }
 
+        if (hasDownloadActivity(status, lastCompletedLengthByGid.get(gid) || 0)) {
+          lastProgressAt = Date.now();
+        }
+        lastCompletedLengthByGid.set(gid, Number(status.completedLength || 0));
+
         if (status.status === "complete") {
           pending.delete(gid);
           continue;
@@ -129,6 +137,16 @@ export class Aria2Service {
         if (status.status === "error" || status.status === "removed") {
           throw new Error(`Aria2 download failed: ${gid} ${status.errorMessage || status.status}`);
         }
+      }
+
+      if (
+        this.noProgressTimeoutMs > 0 &&
+        pending.size > 0 &&
+        Date.now() - lastProgressAt > this.noProgressTimeoutMs
+      ) {
+        throw new Error(
+          `Aria2 download stalled for ${formatDuration(this.noProgressTimeoutMs)}: ${Array.from(pending).join(", ")}`
+        );
       }
 
       if (pending.size > 0) {
@@ -199,4 +217,39 @@ function createDownloadProgress(
     progress,
     errorMessage: status.errorMessage
   };
+}
+
+function hasDownloadActivity(status: Aria2TellStatus, previousCompletedLength: number): boolean {
+  if (status.status === "complete" || status.status === "waiting" || status.status === "paused") {
+    return true;
+  }
+
+  const completedLength = Number(status.completedLength || 0);
+  const downloadSpeed = Number(status.downloadSpeed || 0);
+
+  return completedLength > previousCompletedLength || downloadSpeed > 0;
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number, minimum: number): number {
+  const parsed = Number.parseInt(value || "", 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(minimum, parsed);
+}
+
+function formatDuration(milliseconds: number): string {
+  const seconds = Math.round(milliseconds / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  return `${hours}h`;
 }
