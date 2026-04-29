@@ -16,6 +16,7 @@ interface AListResponse<T> {
 }
 
 interface AListFileInfo {
+  raw_url?: string;
   size?: number | string;
 }
 
@@ -53,6 +54,11 @@ export class XiaoyaService {
   private readonly sizeLookupTimeoutMs = readPositiveInteger(
     process.env.XIAOYA_SIZE_LOOKUP_TIMEOUT_MS,
     5000,
+    1000
+  );
+  private readonly downloadLinkTimeoutMs = readPositiveInteger(
+    process.env.XIAOYA_DOWNLOAD_LINK_TIMEOUT_MS,
+    30000,
     1000
   );
   private readonly folderScanMaxDepth = readPositiveInteger(
@@ -142,9 +148,11 @@ export class XiaoyaService {
 
     const headers = this.createAria2Headers();
 
-    return resources.map((resource) => {
+    return mapWithConcurrency(resources, this.sizeLookupConcurrency, async (resource) => {
       const output = this.createDownloadOutput(resource.path);
-      const url = this.createDownloadUrl(resource.path);
+      const fileInfo = await this.fetchFileInfo(resource.path, this.downloadLinkTimeoutMs);
+      const url = this.resolveRawDownloadUrl(fileInfo.raw_url, resource.path);
+      const expectedSize = toPositiveFileSize(fileInfo.size) || resource.size || undefined;
 
       console.log(`[XiaoyaService] direct download link ready: ${resource.path} -> ${url}`);
       return {
@@ -153,6 +161,7 @@ export class XiaoyaService {
         outputPath: output.outputPath,
         dir: output.dir,
         out: output.out,
+        expectedSize,
         headers: headers.length > 0 ? headers : undefined
       };
     });
@@ -403,32 +412,41 @@ export class XiaoyaService {
   }
 
   private async fetchMetadataSize(resourcePath: string): Promise<number> {
+    const body = await this.fetchFileInfo(resourcePath, this.sizeLookupTimeoutMs);
+    return toPositiveFileSize(body.size);
+  }
+
+  private async fetchFileInfo(resourcePath: string, timeoutMs: number): Promise<AListFileInfo> {
     if (!this.baseUrl) {
-      return 0;
+      throw new Error("XIAOYA_BASE_URL is not configured");
     }
 
     const headers = new Headers(this.createFetchHeaders());
     headers.set("Content-Type", "application/json");
 
-    const response = await this.fetchWithTimeout(`${this.baseUrl}/api/fs/get`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        path: normalizeOpenListPath(resourcePath),
-        password: this.pathPassword
-      })
-    });
+    const response = await this.fetchWithTimeout(
+      `${this.baseUrl}/api/fs/get`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          path: normalizeOpenListPath(resourcePath),
+          password: this.pathPassword
+        })
+      },
+      timeoutMs
+    );
 
     if (!response.ok) {
-      return 0;
+      throw new Error(`XiaoYa get file failed for ${getOpenListName(resourcePath)}: HTTP ${response.status}`);
     }
 
     const body = (await response.json()) as AListResponse<AListFileInfo>;
     if (body.code !== 200) {
-      return 0;
+      throw new Error(`XiaoYa get file failed for ${getOpenListName(resourcePath)}: ${body.message || "unknown error"}`);
     }
 
-    return toPositiveFileSize(body.data?.size);
+    return body.data || {};
   }
 
   private async fetchDownloadHeaderSize(resourcePath: string): Promise<number> {
@@ -467,9 +485,13 @@ export class XiaoyaService {
     return size;
   }
 
-  private async fetchWithTimeout(input: string, init: RequestInit): Promise<Response> {
+  private async fetchWithTimeout(
+    input: string,
+    init: RequestInit,
+    timeoutMs = this.sizeLookupTimeoutMs
+  ): Promise<Response> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.sizeLookupTimeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       return await fetch(input, {
@@ -493,6 +515,22 @@ export class XiaoyaService {
       .join("/");
 
     return `${this.baseUrl}/d/${encodedPath}`;
+  }
+
+  private resolveRawDownloadUrl(rawUrl: string | undefined, resourcePath: string): string {
+    if (!this.baseUrl) {
+      throw new Error("XIAOYA_BASE_URL is not configured");
+    }
+
+    if (!rawUrl) {
+      throw new Error(`XiaoYa download link is empty for ${getOpenListName(resourcePath)}`);
+    }
+
+    if (/^https?:\/\//i.test(rawUrl)) {
+      return rawUrl;
+    }
+
+    return `${this.baseUrl}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`;
   }
 
   private createDownloadOutput(sourcePath: string): { outputPath: string; dir: string; out: string } {
@@ -614,12 +652,12 @@ function readPositiveInteger(value: string | undefined, fallback: number, minimu
   return Math.max(minimum, parsed);
 }
 
-async function mapWithConcurrency<T>(
+async function mapWithConcurrency<T, U = T>(
   items: T[],
   concurrency: number,
-  mapper: (item: T, index: number) => Promise<T>
-): Promise<T[]> {
-  const results = new Array<T>(items.length);
+  mapper: (item: T, index: number) => Promise<U>
+): Promise<U[]> {
+  const results = new Array<U>(items.length);
   let nextIndex = 0;
   const workerCount = Math.min(concurrency, items.length);
 

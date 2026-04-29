@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { DownloadProgress, DownloadTarget } from "../types";
 
@@ -96,6 +96,7 @@ export class Aria2Service {
         });
       });
       console.log(`[Aria2Service] mock downloads completed: ${gids.join(", ")}`);
+      await this.validateDownloads(downloads);
       return downloads.map((download) => download.outputPath);
     }
 
@@ -154,7 +155,14 @@ export class Aria2Service {
       }
     }
 
+    await this.validateDownloads(downloads);
     return downloads.map((download) => download.outputPath);
+  }
+
+  private async validateDownloads(downloads: DownloadTarget[]): Promise<void> {
+    for (const download of downloads) {
+      await validateDownloadedFile(download);
+    }
   }
 
   private async call<T>(method: string, params: unknown[]): Promise<T> {
@@ -188,6 +196,70 @@ export class Aria2Service {
 
     return body.result;
   }
+}
+
+async function validateDownloadedFile(download: DownloadTarget): Promise<void> {
+  let fileStat;
+  try {
+    fileStat = await stat(download.outputPath);
+  } catch {
+    throw new Error(`Downloaded file is missing: ${download.outputPath}`);
+  }
+
+  const actualSize = fileStat.size;
+  const expectedSize = Number(download.expectedSize || 0);
+
+  if (expectedSize > 0 && actualSize < expectedSize * 0.95) {
+    throw new Error(
+      `Downloaded file is too small for ${download.sourcePath}: expected ${formatBytes(expectedSize)}, got ${formatBytes(actualSize)}`
+    );
+  }
+
+  if (actualSize <= 64 * 1024) {
+    const preview = await readSmallText(download.outputPath);
+    const errorMessage = detectErrorResponse(preview);
+    if (errorMessage) {
+      throw new Error(`Downloaded file is an error response for ${download.sourcePath}: ${errorMessage}`);
+    }
+  }
+}
+
+async function readSmallText(filePath: string): Promise<string> {
+  const buffer = await readFile(filePath);
+  return buffer.subarray(0, 4096).toString("utf8").trim();
+}
+
+function detectErrorResponse(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^<!doctype html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
+    return "server returned an HTML page instead of media";
+  }
+
+  if (/^[{[]/.test(trimmed)) {
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        code?: unknown;
+        state?: unknown;
+        message?: unknown;
+        msg?: unknown;
+        error?: unknown;
+      };
+      const message = String(parsed.message || parsed.msg || parsed.error || "unknown error");
+      const code = Number(parsed.code || 0);
+
+      if (code >= 400 || parsed.state === false || parsed.message || parsed.msg || parsed.error) {
+        return message;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function createDownloadProgress(
@@ -252,4 +324,22 @@ function formatDuration(milliseconds: number): string {
 
   const hours = Math.round(minutes / 60);
   return `${hours}h`;
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const precision = unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
 }

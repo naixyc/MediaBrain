@@ -48,6 +48,7 @@ export interface DownloadTarget {
   outputPath: string;
   dir: string;
   out: string;
+  expectedSize?: number;
   headers?: string[];
 }
 

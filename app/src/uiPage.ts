@@ -763,6 +763,10 @@ export function renderUiPage(): string {
           return true;
         }
 
+        if (task.error) {
+          return false;
+        }
+
         var progressItems = Array.isArray(task.downloadProgress) ? task.downloadProgress : [];
         return progressItems.length > 0 && progressItems.every(function (progress) {
           return progress.status === "complete" || Number(progress.progress || 0) >= 100;
