@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { groupResourcesWithSubtitles } from "./resourceGrouping";
+import { groupResourcesWithSubtitles, matchSubtitlesForVideo } from "./resourceGrouping";
 import { formatFileSize } from "../utils/files";
 import type { AIServiceClient } from "./aiServiceClient";
 import type { Aria2Service } from "./aria2Service";
@@ -10,6 +10,7 @@ import type {
   DownloadProgress,
   DownloadTarget,
   ResourceSearchItem,
+  OpenListResource,
   ResourceWithSubtitles,
   TaskSnapshot,
   TaskStatus
@@ -24,10 +25,12 @@ interface MediaTask {
   selectedResourceId?: string;
   selectedResource?: ResourceWithSubtitles;
   videoTargetPath?: string;
+  videoTargetPaths?: string[];
   subtitleTargetPaths?: string[];
   downloadPaths?: string[];
   downloadProgress?: DownloadProgress[];
   finalVideoPath?: string;
+  finalVideoPaths?: string[];
   finalSubtitlePaths?: string[];
   error?: string;
   createdAt: string;
@@ -98,7 +101,7 @@ export class TaskOrchestrator {
     this.startSelectedTask(task, selectedResource);
 
     console.log(
-      `[TaskOrchestrator] task ${task.taskId} created from selected resource ${selectedResource.video.name}`
+      `[TaskOrchestrator] task ${task.taskId} created from selected resource ${selectedResource.name}`
     );
 
     return this.toSnapshot(task);
@@ -111,7 +114,7 @@ export class TaskOrchestrator {
       throw new Error(`task ${task.taskId} is not waiting for resource selection`);
     }
 
-    const selectedResource = task.candidateGroups.find((group) => group.video.id === resourceId);
+    const selectedResource = task.candidateGroups.find((group) => group.id === resourceId);
     if (!selectedResource) {
       throw new Error(`resource ${resourceId} not found in task ${task.taskId}`);
     }
@@ -137,20 +140,24 @@ export class TaskOrchestrator {
     }
 
     const selected = task.selectedResource;
-    const selectedFiles = [selected.video, ...selected.subtitles];
+    const selectedVideos = selected.videos.length > 0 ? selected.videos : [selected.video];
+    const selectedFiles = dedupeResources([...selectedVideos, ...selected.subtitles]);
 
     console.log(
-      `[TaskOrchestrator] task ${task.taskId} pipeline started for ${selected.video.name}`
+      `[TaskOrchestrator] task ${task.taskId} pipeline started for ${selected.name}`
     );
     console.log(
-      `[TaskOrchestrator] task ${task.taskId} selected subtitles: ${selected.subtitles.length}`
+      `[TaskOrchestrator] task ${task.taskId} selected videos: ${selectedVideos.length}, subtitles: ${selected.subtitles.length}`
     );
 
     let downloadTargets: DownloadTarget[];
+    let sourcePathByResourceId = new Map<string, string>();
 
     if (this.mediaResourceService.canCreateDirectDownloadTargets(selectedFiles)) {
       console.log(`[TaskOrchestrator] task ${task.taskId} using direct XiaoYa download links`);
-      task.videoTargetPath = selected.video.path;
+      sourcePathByResourceId = new Map(selectedFiles.map((resource) => [resource.id, resource.path]));
+      task.videoTargetPath = selectedVideos[0]?.path;
+      task.videoTargetPaths = selectedVideos.map((video) => video.path);
       task.subtitleTargetPaths = selected.subtitles.map((subtitle) => subtitle.path);
       downloadTargets = await this.mediaResourceService.createDirectDownloadTargets(selectedFiles);
     } else {
@@ -159,8 +166,16 @@ export class TaskOrchestrator {
         path: resource.path
       }));
       const transferPaths = await this.transferService.transferFiles(files);
-      task.videoTargetPath = transferPaths[0];
-      task.subtitleTargetPaths = transferPaths.slice(1);
+      sourcePathByResourceId = new Map(
+        selectedFiles.map((resource, index) => [resource.id, transferPaths[index] || resource.path])
+      );
+      task.videoTargetPath = selectedVideos[0] ? sourcePathByResourceId.get(selectedVideos[0].id) : undefined;
+      task.videoTargetPaths = selectedVideos
+        .map((video) => sourcePathByResourceId.get(video.id))
+        .filter((targetPath): targetPath is string => Boolean(targetPath));
+      task.subtitleTargetPaths = selected.subtitles
+        .map((subtitle) => sourcePathByResourceId.get(subtitle.id))
+        .filter((targetPath): targetPath is string => Boolean(targetPath));
 
       console.log(
         `[TaskOrchestrator] task ${task.taskId} transferred files: ${transferPaths.join(", ")}`
@@ -192,23 +207,50 @@ export class TaskOrchestrator {
       `[TaskOrchestrator] task ${task.taskId} downloads completed: ${downloadPaths.join(", ")}`
     );
 
-    const finalTargetPath = await this.aiServiceClient.generateTargetPath({
-      taskId: task.taskId,
-      keyword: task.keyword,
-      videoName: selected.video.name,
-      downloadPath: downloadPaths[0],
-      subtitlePaths: downloadPaths.slice(1)
-    });
+    const downloadPathByResourceId = new Map(
+      selectedFiles.map((resource, index) => [resource.id, downloadPaths[index]])
+    );
+    const finalVideoPaths: string[] = [];
+    const finalSubtitlePaths: string[] = [];
 
-    const renameResult = await this.hermesClient.rename({
-      taskId: task.taskId,
-      fromPath: downloadPaths[0],
-      toPath: finalTargetPath,
-      subtitlePaths: downloadPaths.slice(1)
-    });
+    for (let index = 0; index < selectedVideos.length; index += 1) {
+      const video = selectedVideos[index];
+      const videoDownloadPath = downloadPathByResourceId.get(video.id);
+      if (!videoDownloadPath) {
+        throw new Error(`download path missing for ${video.name}`);
+      }
 
-    task.finalVideoPath = renameResult.videoPath;
-    task.finalSubtitlePaths = renameResult.subtitlePaths;
+      const matchedSubtitles = matchSubtitlesForVideo(video, selected.subtitles, selectedVideos.length);
+      const subtitleDownloadPaths = matchedSubtitles
+        .map((subtitle) => downloadPathByResourceId.get(subtitle.id))
+        .filter((subtitlePath): subtitlePath is string => Boolean(subtitlePath));
+
+      const finalTargetPath = await this.aiServiceClient.generateTargetPath({
+        taskId: task.taskId,
+        keyword: task.keyword,
+        videoName: video.name,
+        downloadPath: videoDownloadPath,
+        subtitlePaths: subtitleDownloadPaths,
+        collectionName: selectedVideos.length > 1 ? selected.name : undefined,
+        selectionKind: selected.kind,
+        episodeIndex: index + 1,
+        batchSize: selectedVideos.length
+      });
+
+      const renameResult = await this.hermesClient.rename({
+        taskId: task.taskId,
+        fromPath: videoDownloadPath,
+        toPath: finalTargetPath,
+        subtitlePaths: subtitleDownloadPaths
+      });
+
+      finalVideoPaths.push(renameResult.videoPath);
+      finalSubtitlePaths.push(...renameResult.subtitlePaths);
+    }
+
+    task.finalVideoPath = finalVideoPaths[0];
+    task.finalVideoPaths = finalVideoPaths;
+    task.finalSubtitlePaths = finalSubtitlePaths;
     this.updateStatus(task, "已完成");
   }
 
@@ -221,7 +263,7 @@ export class TaskOrchestrator {
   }
 
   private startSelectedTask(task: MediaTask, selectedResource: ResourceWithSubtitles): void {
-    task.selectedResourceId = selectedResource.video.id;
+    task.selectedResourceId = selectedResource.id;
     task.selectedResource = selectedResource;
     this.updateStatus(task, "已选择资源");
 
@@ -238,10 +280,12 @@ export class TaskOrchestrator {
 
   private createCandidateItems(candidateGroups: ResourceWithSubtitles[]): ResourceSearchItem[] {
     return candidateGroups.map((group) => ({
-      id: group.video.id,
-      name: group.video.name,
-      size: formatFileSize(group.video.size),
-      source: group.video.source,
+      id: group.id,
+      name: group.name,
+      size: formatFileSize(sumResourceSizes([...group.videos, ...group.subtitles])),
+      source: group.source,
+      kind: group.kind,
+      videosCount: group.videos.length,
       subtitlesCount: group.subtitles.length
     }));
   }
@@ -259,7 +303,7 @@ export class TaskOrchestrator {
     const matchingTasks = Array.from(this.tasks.values()).filter(
       (task) =>
         task.status === "等待选择资源" &&
-        task.candidateGroups.some((group) => group.video.id === resourceId)
+        task.candidateGroups.some((group) => group.id === resourceId)
     );
 
     if (matchingTasks.length === 0) {
@@ -291,10 +335,12 @@ export class TaskOrchestrator {
       candidates: task.candidates,
       selectedResourceId: task.selectedResourceId,
       videoTargetPath: task.videoTargetPath,
+      videoTargetPaths: task.videoTargetPaths,
       subtitleTargetPaths: task.subtitleTargetPaths,
       downloadPaths: task.downloadPaths,
       downloadProgress: task.downloadProgress,
       finalVideoPath: task.finalVideoPath,
+      finalVideoPaths: task.finalVideoPaths,
       finalSubtitlePaths: task.finalSubtitlePaths,
       error: task.error,
       createdAt: task.createdAt,
@@ -310,4 +356,18 @@ function mergeDownloadProgress(
   const map = new Map(current.map((item) => [item.gid, item]));
   map.set(next.gid, next);
   return Array.from(map.values());
+}
+
+function dedupeResources(resources: OpenListResource[]): OpenListResource[] {
+  const map = new Map<string, OpenListResource>();
+
+  for (const resource of resources) {
+    map.set(resource.id, resource);
+  }
+
+  return Array.from(map.values());
+}
+
+function sumResourceSizes(resources: { size: number }[]): number {
+  return resources.reduce((total, resource) => total + (Number(resource.size) || 0), 0);
 }

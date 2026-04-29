@@ -9,12 +9,22 @@ export interface OpenListResource {
   source: string;
   type: ResourceType;
   parentFolder: string;
+  collectionFolder?: string;
+  collectionName?: string;
   provider?: ResourceProvider;
 }
 
+export type ResourceSelectionKind = "collection" | "season" | "single";
+
 export interface ResourceWithSubtitles {
+  id: string;
+  name: string;
+  kind: ResourceSelectionKind;
   video: OpenListResource;
+  videos: OpenListResource[];
   subtitles: OpenListResource[];
+  parentFolder: string;
+  source: string;
 }
 
 export interface ResourceSearchItem {
@@ -22,6 +32,8 @@ export interface ResourceSearchItem {
   name: string;
   size: string;
   source: string;
+  kind: ResourceSelectionKind;
+  videosCount: number;
   subtitlesCount: number;
 }
 
@@ -65,10 +77,12 @@ export interface TaskSnapshot {
   candidates: ResourceSearchItem[];
   selectedResourceId?: string;
   videoTargetPath?: string;
+  videoTargetPaths?: string[];
   subtitleTargetPaths?: string[];
   downloadPaths?: string[];
   downloadProgress?: DownloadProgress[];
   finalVideoPath?: string;
+  finalVideoPaths?: string[];
   finalSubtitlePaths?: string[];
   error?: string;
   createdAt: string;

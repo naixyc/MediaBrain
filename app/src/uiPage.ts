@@ -288,7 +288,7 @@ export function renderUiPage(): string {
 
     .select-button {
       height: 34px;
-      min-width: 62px;
+      min-width: 92px;
       border-radius: 8px;
       padding: 0 12px;
       background: #111827;
@@ -698,6 +698,18 @@ export function renderUiPage(): string {
         return size.toFixed(precision) + " " + units[index];
       }
 
+      function selectionKindLabel(kind) {
+        if (kind === "collection") return "\u5168\u96c6";
+        if (kind === "season") return "\u6574\u5b63";
+        return "\u5355\u96c6";
+      }
+
+      function selectionActionLabel(item) {
+        if (item.kind === "collection") return "\u4e0b\u8f7d\u5168\u96c6";
+        if (item.kind === "season") return "\u4e0b\u8f7d\u6574\u5b63";
+        return "\u4e0b\u8f7d\u5355\u96c6";
+      }
+
       function renderCandidates() {
         var candidates = Array.isArray(state.currentCandidates) ? state.currentCandidates : [];
         var selectedId = state.currentTask && state.currentTask.selectedResourceId;
@@ -711,14 +723,20 @@ export function renderUiPage(): string {
         els.resultList.innerHTML = candidates.map(function (item) {
           var disabled = state.selectingId || selectedId;
           var isSelected = selectedId === item.id || state.selectingId === item.id;
-          var buttonText = isSelected ? "已选择" : "选择";
+          var videosCount = Number(item.videosCount || 0);
+          var buttonText = isSelected ? "\u5df2\u9009\u62e9" : selectionActionLabel(item);
+          var episodeMeta = videosCount > 1
+            ? '<span class="pill">' + videosCount + ' \u96c6</span>'
+            : '';
           return '<article class="row">' +
             '<div>' +
               '<div class="row-title">' + escapeHtml(item.name) + '</div>' +
               '<div class="row-meta">' +
+                '<span class="pill violet">' + selectionKindLabel(item.kind) + '</span>' +
+                episodeMeta +
                 '<span class="pill">' + escapeHtml(item.size) + '</span>' +
                 '<span class="pill">' + escapeHtml(item.source) + '</span>' +
-                '<span class="pill">' + Number(item.subtitlesCount || 0) + ' 字幕</span>' +
+                '<span class="pill">' + Number(item.subtitlesCount || 0) + ' \u5b57\u5e55</span>' +
               '</div>' +
             '</div>' +
             '<button class="select-button" type="button" data-resource-id="' + escapeHtml(item.id) + '"' +
@@ -799,16 +817,26 @@ export function renderUiPage(): string {
             text: "\u5931\u8d25\u539f\u56e0: " + task.error
           });
         }
-        if (task.videoTargetPath) items.push({ type: "path", text: "源视频: " + task.videoTargetPath });
+        var sourceVideos = Array.isArray(task.videoTargetPaths) && task.videoTargetPaths.length
+          ? task.videoTargetPaths
+          : (task.videoTargetPath ? [task.videoTargetPath] : []);
+        sourceVideos.forEach(function (path) {
+          items.push({ type: "path", text: "\u6e90\u89c6\u9891: " + path });
+        });
         (task.subtitleTargetPaths || []).forEach(function (path) {
-          items.push({ type: "path", text: "源字幕: " + path });
+          items.push({ type: "path", text: "\u6e90\u5b57\u5e55: " + path });
         });
         (task.downloadPaths || []).forEach(function (path) {
-          items.push({ type: "path", text: "下载: " + path });
+          items.push({ type: "path", text: "\u4e0b\u8f7d: " + path });
         });
-        if (task.finalVideoPath) items.push({ type: "path", text: "整理: " + task.finalVideoPath });
+        var finalVideos = Array.isArray(task.finalVideoPaths) && task.finalVideoPaths.length
+          ? task.finalVideoPaths
+          : (task.finalVideoPath ? [task.finalVideoPath] : []);
+        finalVideos.forEach(function (path) {
+          items.push({ type: "path", text: "\u6574\u7406: " + path });
+        });
         (task.finalSubtitlePaths || []).forEach(function (path) {
-          items.push({ type: "path", text: "整理字幕: " + path });
+          items.push({ type: "path", text: "\u6574\u7406\u5b57\u5e55: " + path });
         });
 
         if (!items.length) {

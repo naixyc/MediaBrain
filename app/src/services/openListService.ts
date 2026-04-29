@@ -287,6 +287,8 @@ export class OpenListService {
         source,
         type,
         parentFolder,
+        collectionFolder: parentFolder,
+        collectionName: path.basename(parentFolder),
         provider: "local"
       });
     }
@@ -318,6 +320,8 @@ export class OpenListService {
         source,
         type,
         parentFolder,
+        collectionFolder: parentFolder,
+        collectionName: path.basename(parentFolder),
         provider: "local"
       });
     }
@@ -393,6 +397,8 @@ export class OpenListService {
         source,
         type,
         parentFolder,
+        collectionFolder: parentFolder,
+        collectionName: getOpenListSource(parentFolder, this.fallbackSource),
         provider: "openlist"
       }
     ];

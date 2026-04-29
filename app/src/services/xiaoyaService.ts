@@ -4,6 +4,7 @@ import {
   createStableResourceId,
   getOpenListName,
   getOpenListParent,
+  joinOpenListPath,
   normalizeOpenListPath
 } from "../utils/files";
 import type { DownloadTarget, OpenListResource } from "../types";
@@ -16,6 +17,21 @@ interface AListResponse<T> {
 
 interface AListFileInfo {
   size?: number | string;
+}
+
+interface AListListData {
+  content?: AListListItem[];
+}
+
+interface AListListItem {
+  name?: string;
+  size?: number | string;
+  is_dir?: boolean;
+}
+
+interface XiaoyaSearchAnchor {
+  href: string;
+  label: string;
 }
 
 export class XiaoyaService {
@@ -38,6 +54,21 @@ export class XiaoyaService {
     process.env.XIAOYA_SIZE_LOOKUP_TIMEOUT_MS,
     5000,
     1000
+  );
+  private readonly folderScanMaxDepth = readPositiveInteger(
+    process.env.XIAOYA_FOLDER_SCAN_MAX_DEPTH,
+    4,
+    0
+  );
+  private readonly folderScanMaxItems = readPositiveInteger(
+    process.env.XIAOYA_FOLDER_SCAN_MAX_ITEMS,
+    1200,
+    1
+  );
+  private readonly folderExpansionMaxFolders = readPositiveInteger(
+    process.env.XIAOYA_FOLDER_EXPANSION_MAX_FOLDERS,
+    20,
+    1
   );
   private readonly downloadRoot = path.resolve(
     process.env.ARIA2_DOWNLOAD_DIR || path.join(process.cwd(), "downloads")
@@ -75,7 +106,7 @@ export class XiaoyaService {
     }
 
     const html = await response.text();
-    const resources = await this.enrichResourceSizes(this.parseSearchHtml(html));
+    const resources = await this.enrichResourceSizes(await this.parseSearchHtml(html));
 
     console.log(`[XiaoyaService] found ${resources.length} video/subtitle resources`);
     for (const resource of resources) {
@@ -127,18 +158,40 @@ export class XiaoyaService {
     });
   }
 
-  private parseSearchHtml(html: string): OpenListResource[] {
+  private async parseSearchHtml(html: string): Promise<OpenListResource[]> {
     const resources = new Map<string, OpenListResource>();
-    const anchorPattern = /<a\s+href=(?:"([^"]+)"|([^>\s]+))[^>]*>([\s\S]*?)<\/a>/gi;
-    let match: RegExpExecArray | null;
+    const folders: { path: string; name: string }[] = [];
 
-    while ((match = anchorPattern.exec(html)) && resources.size < this.maxResults) {
-      const href = decodeHtmlEntity(match[1] || match[2] || "").trim();
-      const label = stripHtml(decodeHtmlEntity(match[3] || "")).trim();
+    for (const anchor of parseAnchors(html)) {
+      const href = decodeHtmlEntity(anchor.href).trim();
+      const label = stripHtml(decodeHtmlEntity(anchor.label)).trim();
       const resource = this.mapAnchorToResource(href, label);
 
       if (resource) {
         resources.set(resource.id, resource);
+      } else {
+        const folder = this.mapAnchorToFolder(href, label);
+        if (folder && !folders.some((item) => item.path === folder.path)) {
+          folders.push(folder);
+        }
+      }
+
+      if (resources.size >= this.maxResults) {
+        break;
+      }
+    }
+
+    for (const folder of folders.slice(0, this.folderExpansionMaxFolders)) {
+      if (resources.size >= this.maxResults) {
+        break;
+      }
+
+      const folderResources = await this.listFolderResources(folder.path, folder.path, folder.name);
+      for (const resource of folderResources) {
+        resources.set(resource.id, resource);
+        if (resources.size >= this.maxResults) {
+          break;
+        }
       }
     }
 
@@ -186,8 +239,143 @@ export class XiaoyaService {
       source,
       type,
       parentFolder,
+      collectionFolder: parentFolder,
+      collectionName: getOpenListName(parentFolder),
       provider: "xiaoya"
     };
+  }
+
+  private mapAnchorToFolder(href: string, label: string): { path: string; name: string } | null {
+    if (!this.baseUrl || !href || href === "/" || href.startsWith("#")) {
+      return null;
+    }
+
+    let url: URL;
+    try {
+      url = new URL(href, `${this.baseUrl}/`);
+    } catch {
+      return null;
+    }
+
+    if (url.origin !== new URL(this.baseUrl).origin) {
+      return null;
+    }
+
+    let folderPath = url.pathname;
+    if (folderPath.startsWith("/d/")) {
+      folderPath = folderPath.slice("/d".length);
+    }
+
+    folderPath = normalizeOpenListPath(safeDecodeURIComponent(folderPath));
+    const displayPath = label ? normalizeOpenListPath(label) : folderPath;
+    const name = getOpenListName(displayPath || folderPath);
+
+    if (!name || classifyResourceType(name)) {
+      return null;
+    }
+
+    return {
+      path: folderPath,
+      name
+    };
+  }
+
+  private async listFolderResources(
+    folderPath: string,
+    collectionFolder: string,
+    collectionName: string,
+    depth = 0,
+    scanned = { count: 0 }
+  ): Promise<OpenListResource[]> {
+    if (depth > this.folderScanMaxDepth || scanned.count >= this.folderScanMaxItems) {
+      return [];
+    }
+
+    const body = await this.fetchFolderList(folderPath).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`[XiaoyaService] skip folder expansion ${folderPath}: ${message}`);
+      return null;
+    });
+
+    const items = body?.data?.content || [];
+    const resources: OpenListResource[] = [];
+
+    for (const item of items) {
+      if (scanned.count >= this.folderScanMaxItems || !item.name) {
+        break;
+      }
+      scanned.count += 1;
+
+      const itemPath = joinOpenListPath(folderPath, item.name);
+
+      if (item.is_dir) {
+        resources.push(
+          ...(await this.listFolderResources(
+            itemPath,
+            collectionFolder,
+            collectionName,
+            depth + 1,
+            scanned
+          ))
+        );
+        continue;
+      }
+
+      const type = classifyResourceType(item.name);
+      if (!type) {
+        continue;
+      }
+
+      const parentFolder = normalizeOpenListPath(folderPath);
+      const source = this.createSourceName(itemPath);
+
+      resources.push({
+        id: createStableResourceId(source, itemPath),
+        name: item.name,
+        size: Number(item.size || 0),
+        path: itemPath,
+        source,
+        type,
+        parentFolder,
+        collectionFolder,
+        collectionName,
+        provider: "xiaoya"
+      });
+    }
+
+    return resources;
+  }
+
+  private async fetchFolderList(folderPath: string): Promise<AListResponse<AListListData>> {
+    if (!this.baseUrl) {
+      throw new Error("XIAOYA_BASE_URL is not configured");
+    }
+
+    const headers = new Headers(this.createFetchHeaders());
+    headers.set("Content-Type", "application/json");
+
+    const response = await this.fetchWithTimeout(`${this.baseUrl}/api/fs/list`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        path: normalizeOpenListPath(folderPath),
+        password: this.pathPassword,
+        page: 1,
+        per_page: this.folderScanMaxItems,
+        refresh: false
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const body = (await response.json()) as AListResponse<AListListData>;
+    if (body.code !== 200) {
+      throw new Error(body.message || "XiaoYa list failed");
+    }
+
+    return body;
   }
 
   private async enrichResourceSizes(resources: OpenListResource[]): Promise<OpenListResource[]> {
@@ -354,6 +542,21 @@ export class XiaoyaService {
 
 function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, "");
+}
+
+function parseAnchors(html: string): XiaoyaSearchAnchor[] {
+  const anchors: XiaoyaSearchAnchor[] = [];
+  const anchorPattern = /<a\s+href=(?:"([^"]+)"|([^>\s]+))[^>]*>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = anchorPattern.exec(html))) {
+    anchors.push({
+      href: match[1] || match[2] || "",
+      label: match[3] || ""
+    });
+  }
+
+  return anchors;
 }
 
 function decodeHtmlEntity(value: string): string {

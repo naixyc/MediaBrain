@@ -8,6 +8,10 @@ interface GeneratePathRequest {
   keyword?: string;
   videoName?: string;
   downloadPath?: string;
+  collectionName?: string;
+  selectionKind?: string;
+  episodeIndex?: number;
+  batchSize?: number;
 }
 
 const server = createServer(async (request, response) => {
@@ -25,8 +29,18 @@ const server = createServer(async (request, response) => {
       const keyword = body.keyword || "media";
       const downloadPath = body.downloadPath || body.videoName || "video.mkv";
       const extension = path.extname(downloadPath) || path.extname(body.videoName || "") || ".mkv";
-      const targetDirectory = process.env.AI_TARGET_ROOT || path.join(path.dirname(downloadPath), "renamed");
-      const targetName = `${sanitizeFileName(keyword)}${extension}`;
+      const isBatch = Number(body.batchSize || 0) > 1;
+      const targetRoot = process.env.AI_TARGET_ROOT || path.join(path.dirname(downloadPath), "renamed");
+      const targetDirectory = isBatch
+        ? path.join(targetRoot, sanitizeFileName(stripEpisodeCount(body.collectionName || keyword)))
+        : targetRoot;
+      const videoBaseName = path.basename(
+        body.videoName || path.basename(downloadPath),
+        path.extname(body.videoName || downloadPath)
+      );
+      const targetName = isBatch
+        ? `${sanitizeFileName(videoBaseName || `episode-${body.episodeIndex || 1}`)}${extension}`
+        : `${sanitizeFileName(keyword)}${extension}`;
       const targetPath = path.join(targetDirectory, targetName);
 
       console.log(`[AIService] task ${body.taskId || "<none>"} target path: ${targetPath}`);
@@ -74,4 +88,8 @@ function sanitizeFileName(value: string): string {
     .trim()
     .replace(/\s/g, ".")
     .slice(0, 120) || "media";
+}
+
+function stripEpisodeCount(value: string): string {
+  return value.replace(/\s*\(\d+\s*\u96c6\)\s*$/u, "").trim() || value;
 }

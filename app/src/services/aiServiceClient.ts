@@ -6,6 +6,10 @@ interface GeneratePathRequest {
   videoName: string;
   downloadPath: string;
   subtitlePaths: string[];
+  collectionName?: string;
+  selectionKind?: string;
+  episodeIndex?: number;
+  batchSize?: number;
 }
 
 interface GeneratePathResponse {
@@ -36,4 +40,3 @@ export class AIServiceClient {
     return path.normalize(body.targetPath);
   }
 }
-

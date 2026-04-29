@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import * as path from "node:path";
 
 export const VIDEO_EXTENSIONS = new Set([
+  ".3g2",
+  ".3gp",
+  ".asf",
   ".mp4",
   ".mkv",
   ".avi",
@@ -10,9 +13,21 @@ export const VIDEO_EXTENSIONS = new Set([
   ".flv",
   ".webm",
   ".m4v",
+  ".m2ts",
+  ".mts",
+  ".mxf",
+  ".ogm",
+  ".ogv",
+  ".rm",
+  ".rmvb",
   ".ts",
+  ".vob",
   ".mpeg",
-  ".mpg"
+  ".mpg",
+  ".divx",
+  ".f4v",
+  ".iso",
+  ".strm"
 ]);
 
 export const SUBTITLE_EXTENSIONS = new Set([
@@ -20,7 +35,13 @@ export const SUBTITLE_EXTENSIONS = new Set([
   ".ass",
   ".ssa",
   ".vtt",
-  ".sub"
+  ".sub",
+  ".idx",
+  ".sup",
+  ".smi",
+  ".sami",
+  ".mpl",
+  ".ttml"
 ]);
 
 const SUBTITLE_HINT_TOKENS = new Set([

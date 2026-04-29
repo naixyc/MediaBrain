@@ -22,16 +22,18 @@ export class ResourceSelectionService {
     const groupedResources = groupResourcesWithSubtitles(resources);
 
     for (const resource of groupedResources) {
-      this.selectionCache.set(resource.video.id, resource);
+      this.selectionCache.set(resource.id, resource);
     }
 
     console.log(`[ResourceSelectionService] selectable video resources: ${groupedResources.length}`);
 
     return groupedResources.map((resource) => ({
-      id: resource.video.id,
-      name: resource.video.name,
-      size: formatFileSize(resource.video.size),
-      source: resource.video.source,
+      id: resource.id,
+      name: resource.name,
+      size: formatFileSize(sumResourceSizes([...resource.videos, ...resource.subtitles])),
+      source: resource.source,
+      kind: resource.kind,
+      videosCount: resource.videos.length,
       subtitlesCount: resource.subtitles.length
     }));
   }
@@ -39,4 +41,8 @@ export class ResourceSelectionService {
   getSelection(resourceId: string): ResourceWithSubtitles | null {
     return this.selectionCache.get(resourceId) ?? null;
   }
+}
+
+function sumResourceSizes(resources: { size: number }[]): number {
+  return resources.reduce((total, resource) => total + (Number(resource.size) || 0), 0);
 }
