@@ -111,6 +111,8 @@ interface EmbyMediaSource {
   Protocol?: string;
 }
 
+type EmbySearchItemType = "Movie" | "Series" | "Episode";
+
 class HttpRequestError extends Error {
   constructor(
     message: string,
@@ -343,36 +345,41 @@ export class EmbyService {
 
   private async searchServer(server: EmbyServerConfig, keyword: string): Promise<OpenListResource[]> {
     const session = await this.authenticate(server);
-    const searchParams = new URLSearchParams({
-      UserId: session.userId,
-      Recursive: "true",
-      SearchTerm: keyword,
-      IncludeItemTypes: "Movie,Series,Episode",
-      Fields: [
-        "MediaSources",
-        "Path",
-        "ProviderIds",
-        "ParentId",
-        "SeriesId",
-        "SeriesName",
-        "SeasonId",
-        "SeasonName",
-        "IndexNumber",
-        "ParentIndexNumber",
-        "ProductionYear"
-      ].join(","),
-      Limit: String(this.maxResults)
-    });
 
     console.log(`[EmbyService] searching ${server.name}, keyword="${keyword}"`);
-    const body = await this.fetchJsonWithFallback<EmbyItemListResponse>(
-      server,
-      `/Users/${encodeURIComponent(session.userId)}/Items?${searchParams.toString()}`,
-      { method: "GET" },
-      session
+    const searchRequests = [
+      { label: "Movie search", load: () => this.fetchSearchItems(server, session, keyword, "Movie") },
+      { label: "Series search", load: () => this.fetchSearchItems(server, session, keyword, "Series") },
+      { label: "Episode search", load: () => this.fetchSearchItems(server, session, keyword, "Episode") },
+      { label: "Movie prefix search", load: () => this.fetchNamePrefixItems(server, session, keyword, "Movie") },
+      { label: "Series prefix search", load: () => this.fetchNamePrefixItems(server, session, keyword, "Series") }
+    ];
+
+    const itemGroups = await Promise.all(
+      searchRequests.map((request) =>
+        request.load().catch((error) => {
+          console.log(`[EmbyService] ${request.label} ${server.name} failed: ${formatError(error)}`);
+          return [] as EmbyItem[];
+        })
+      )
     );
 
-    const items = body.Items || [];
+    let items = dedupeEmbyItems(itemGroups.flat());
+    const derivedPrefixes = deriveNamePrefixes(items, keyword).slice(0, 4);
+    if (derivedPrefixes.length > 0) {
+      const derivedPrefixGroups = await Promise.all(
+        derivedPrefixes.flatMap((prefix) =>
+          (["Movie", "Series"] as const).map((itemType) =>
+            this.fetchNamePrefixItems(server, session, prefix, itemType).catch((error) => {
+              console.log(`[EmbyService] ${itemType} derived prefix search ${server.name} failed: ${formatError(error)}`);
+              return [] as EmbyItem[];
+            })
+          )
+        )
+      );
+      items = dedupeEmbyItems([...items, ...derivedPrefixGroups.flat()]);
+    }
+
     const resources: OpenListResource[] = [];
     const seriesIdsToExpand = new Set<string>();
     const fallbackItems: EmbyItem[] = [];
@@ -405,11 +412,143 @@ export class EmbyService {
       resources.push(...episodes.flatMap((episode) => this.mapItemToResource(server, episode)));
     }
 
-    for (const item of fallbackItems) {
+    const playableFallbackItems = await Promise.all(
+      fallbackItems.map((item) => this.resolvePlayableSearchItem(server, session, item))
+    );
+
+    for (const item of playableFallbackItems) {
+      if (!item) {
+        continue;
+      }
+
       resources.push(...this.mapItemToResource(server, item));
     }
 
     return dedupeResources(resources);
+  }
+
+  private async fetchSearchItems(
+    server: EmbyServerConfig,
+    session: EmbyAuthSession,
+    keyword: string,
+    includeItemTypes: EmbySearchItemType
+  ): Promise<EmbyItem[]> {
+    const searchParams = new URLSearchParams({
+      UserId: session.userId,
+      Recursive: "true",
+      SearchTerm: keyword,
+      IncludeItemTypes: includeItemTypes,
+      Fields: [
+        "MediaSources",
+        "Path",
+        "ProviderIds",
+        "ParentId",
+        "SeriesId",
+        "SeriesName",
+        "SeasonId",
+        "SeasonName",
+        "IndexNumber",
+        "ParentIndexNumber",
+        "ProductionYear"
+      ].join(","),
+      Limit: String(this.maxResults)
+    });
+
+    const body = await this.fetchJsonWithFallback<EmbyItemListResponse>(
+      server,
+      `/Users/${encodeURIComponent(session.userId)}/Items?${searchParams.toString()}`,
+      { method: "GET" },
+      session
+    );
+
+    return body.Items || [];
+  }
+
+  private async fetchNamePrefixItems(
+    server: EmbyServerConfig,
+    session: EmbyAuthSession,
+    keyword: string,
+    includeItemTypes: Exclude<EmbySearchItemType, "Episode">
+  ): Promise<EmbyItem[]> {
+    const searchParams = new URLSearchParams({
+      UserId: session.userId,
+      Recursive: "true",
+      NameStartsWith: keyword,
+      IncludeItemTypes: includeItemTypes,
+      Fields: [
+        "MediaSources",
+        "Path",
+        "ProviderIds",
+        "ParentId",
+        "SeriesId",
+        "SeriesName",
+        "SeasonId",
+        "SeasonName",
+        "IndexNumber",
+        "ParentIndexNumber",
+        "ProductionYear"
+      ].join(","),
+      Limit: String(this.maxResults)
+    });
+
+    const body = await this.fetchJsonWithFallback<EmbyItemListResponse>(
+      server,
+      `/Users/${encodeURIComponent(session.userId)}/Items?${searchParams.toString()}`,
+      { method: "GET" },
+      session
+    );
+
+    return body.Items || [];
+  }
+
+  private async resolvePlayableSearchItem(
+    server: EmbyServerConfig,
+    session: EmbyAuthSession,
+    item: EmbyItem
+  ): Promise<EmbyItem | null> {
+    if (!item.Id || (item.Type !== "Movie" && item.Type !== "Episode")) {
+      return item;
+    }
+
+    if (selectMediaSource(item.MediaSources)) {
+      return item;
+    }
+
+    try {
+      return await this.fetchItemDetails(server, session, item.Id);
+    } catch (error) {
+      console.log(`[EmbyService] item detail ${item.Id} failed: ${formatError(error)}`);
+      return item;
+    }
+  }
+
+  private async fetchItemDetails(
+    server: EmbyServerConfig,
+    session: EmbyAuthSession,
+    itemId: string
+  ): Promise<EmbyItem> {
+    const searchParams = new URLSearchParams({
+      Fields: [
+        "MediaSources",
+        "Path",
+        "ProviderIds",
+        "ParentId",
+        "SeriesId",
+        "SeriesName",
+        "SeasonId",
+        "SeasonName",
+        "IndexNumber",
+        "ParentIndexNumber",
+        "ProductionYear"
+      ].join(",")
+    });
+
+    return this.fetchJsonWithFallback<EmbyItem>(
+      server,
+      `/Users/${encodeURIComponent(session.userId)}/Items/${encodeURIComponent(itemId)}?${searchParams.toString()}`,
+      { method: "GET" },
+      session
+    );
   }
 
   private async fetchSeriesEpisodes(
@@ -1194,6 +1333,48 @@ function dedupeResources(resources: OpenListResource[]): OpenListResource[] {
     map.set(resource.id, resource);
   }
   return Array.from(map.values());
+}
+
+function dedupeEmbyItems(items: EmbyItem[]): EmbyItem[] {
+  const map = new Map<string, EmbyItem>();
+  for (const item of items) {
+    const key = item.Id ? `${item.Type || "Item"}:${item.Id}` : `${item.Type || "Item"}:${item.Name || ""}`;
+    map.set(key, item);
+  }
+  return Array.from(map.values());
+}
+
+function deriveNamePrefixes(items: EmbyItem[], keyword: string): string[] {
+  const normalizedKeyword = keyword.trim();
+  if (normalizedKeyword.length < 2) {
+    return [];
+  }
+
+  const keywordLower = normalizedKeyword.toLowerCase();
+  const prefixes: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of items) {
+    const name = item.Name?.trim();
+    if (!name) {
+      continue;
+    }
+
+    const index = name.toLowerCase().indexOf(keywordLower);
+    if (index <= 0) {
+      continue;
+    }
+
+    const prefix = name.slice(0, index + normalizedKeyword.length).trim();
+    if (prefix === normalizedKeyword || prefix.length > 40 || seen.has(prefix)) {
+      continue;
+    }
+
+    seen.add(prefix);
+    prefixes.push(prefix);
+  }
+
+  return prefixes;
 }
 
 function readPositiveInteger(value: string | undefined, fallback: number, minimum: number): number {
