@@ -1208,6 +1208,7 @@ export function renderUiPage(): string {
         state.currentKeyword = keyword;
         state.currentCandidates = [];
         state.hasSearched = true;
+        els.resultList.scrollTop = 0;
         els.searchStatus.textContent = "搜索中";
         renderAll();
 

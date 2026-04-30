@@ -156,7 +156,11 @@ function shouldCreateCollectionGroup(collectionFolder: string, videos: OpenListR
   const parentFolders = Array.from(new Set(videos.map((video) => video.parentFolder)));
 
   if (parentFolders.length === 1) {
-    return parentFolders[0] === collectionFolder;
+    return (
+      parentFolders[0] === collectionFolder &&
+      hasEpisodeLikeVideoSet(videos) &&
+      !isGenericCollectionFolderName(getOpenListName(collectionFolder))
+    );
   }
 
   const seasonLikeFolders = parentFolders
@@ -176,7 +180,44 @@ function getSharedCollectionName(resources: OpenListResource[]): string | undefi
 }
 
 function isSeasonLikeFolderName(value: string): boolean {
-  return /(?:season|series|s\d{1,2}|第\s*\d+\s*[季部]|part\s*\d+)/i.test(value);
+  return /(?:season|series|s\d{1,2}|\u7b2c\s*\d+\s*[\u5b63\u90e8]|part\s*\d+)/i.test(value);
+}
+
+function isGenericCollectionFolderName(value: string): boolean {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return true;
+  }
+
+  return (
+    /^[a-z]$/i.test(normalized) ||
+    /^bd\d{4,}$/i.test(normalized) ||
+    /^\d{1,3}$/.test(normalized) ||
+    /^\d{1,3}\s*(?:\u7535\u89c6\u5267\u96c6|\u5267\u96c6|\u52a8\u6f2b)$/i.test(normalized) ||
+    /(?:\u6587\u4ef6|\u6587\u4ef6\u5939)\d*/i.test(normalized) ||
+    /(?:\u84dd\u5149\u539f\u76d8|remux|iso|top\s*\d+)/i.test(normalized)
+  );
+}
+
+function hasEpisodeLikeVideoSet(videos: OpenListResource[]): boolean {
+  if (videos.length <= 1) {
+    return false;
+  }
+
+  const episodeLikeVideos = videos.filter((video) => isEpisodeLikeVideoName(video.name));
+  return episodeLikeVideos.length >= Math.min(2, videos.length);
+}
+
+function isEpisodeLikeVideoName(fileName: string): boolean {
+  const baseName = getOpenListName(fileName).replace(/\.[^.]+$/, "");
+  const normalized = baseName.replace(/[\s._-]+/g, " ").trim();
+
+  return (
+    /^\d{1,3}$/i.test(normalized) ||
+    /\bs\d{1,2}e\d{1,3}\b/i.test(normalized) ||
+    /\b(?:ep|episode|e)\s*\d{1,3}\b/i.test(normalized) ||
+    /(?:\u7b2c\s*\d{1,4}\s*[\u96c6\u8bdd\u8a71]|[\u7b2c\[【(\uff08]\s*\d{1,4}\s*[\]】)\uff09\u96c6\u8bdd\u8a71])/.test(normalized)
+  );
 }
 
 function sortGroups(groups: ResourceWithSubtitles[]): ResourceWithSubtitles[] {
