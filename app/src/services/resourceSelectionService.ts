@@ -19,7 +19,10 @@ export class ResourceSelectionService {
       return [];
     }
 
-    const groupedResources = rankGroupedResources(groupResourcesWithSubtitles(resources), keyword);
+    const groupedResources = rankGroupedResources(
+      collapseEmbySeriesGroups(groupResourcesWithSubtitles(resources)),
+      keyword
+    );
 
     for (const resource of groupedResources) {
       this.selectionCache.set(resource.id, resource);
@@ -51,6 +54,56 @@ export class ResourceSelectionService {
 
 function sumResourceSizes(resources: { size: number }[]): number {
   return resources.reduce((total, resource) => total + (Number(resource.size) || 0), 0);
+}
+
+function collapseEmbySeriesGroups(resources: ResourceWithSubtitles[]): ResourceWithSubtitles[] {
+  const embyCollectionKeys = new Set<string>();
+  const embyAggregateKeys = new Set<string>();
+
+  for (const resource of resources) {
+    if (resource.video.provider !== "emby" || resource.videos.length <= 1) {
+      continue;
+    }
+
+    const key = getEmbySeriesKey(resource);
+    if (!key || resource.kind === "single") {
+      continue;
+    }
+
+    embyAggregateKeys.add(key);
+    if (resource.kind === "collection") {
+      embyCollectionKeys.add(key);
+    }
+  }
+
+  if (embyAggregateKeys.size === 0) {
+    return resources;
+  }
+
+  return resources.filter((resource) => {
+    if (resource.video.provider !== "emby") {
+      return true;
+    }
+
+    const key = getEmbySeriesKey(resource);
+    if (!key) {
+      return true;
+    }
+
+    if (resource.kind === "single" && embyAggregateKeys.has(key)) {
+      return false;
+    }
+
+    if (resource.kind === "season" && embyCollectionKeys.has(key)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function getEmbySeriesKey(resource: ResourceWithSubtitles): string | undefined {
+  return resource.video.collectionFolder || resource.video.parentFolder || resource.parentFolder;
 }
 
 function rankGroupedResources(

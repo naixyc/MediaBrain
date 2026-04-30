@@ -71,6 +71,8 @@ const server = createServer(async (request, response) => {
           "GET /sources/health",
           "GET /emby/servers",
           "POST /emby/servers",
+          "PUT /emby/servers/:serverId",
+          "DELETE /emby/servers/:serverId",
           "GET /resources/search?keyword=xxx",
           "POST /resources/select"
         ]
@@ -146,6 +148,23 @@ const server = createServer(async (request, response) => {
       const serverSummary = await embyService.addServer(body);
       sendJson(response, 201, serverSummary);
       return;
+    }
+
+    if (url.pathname.startsWith("/emby/servers/")) {
+      const serverId = decodeURIComponent(url.pathname.slice("/emby/servers/".length));
+
+      if (request.method === "PUT") {
+        const body = await readJsonBody<CreateEmbyServerRequest>(request);
+        const serverSummary = await embyService.updateServer(serverId, body);
+        sendJson(response, 200, serverSummary);
+        return;
+      }
+
+      if (request.method === "DELETE") {
+        const serverSummary = embyService.deleteServer(serverId);
+        sendJson(response, 200, serverSummary);
+        return;
+      }
     }
 
     if (request.method === "GET" && url.pathname === "/resources/search") {

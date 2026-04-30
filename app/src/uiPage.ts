@@ -214,6 +214,31 @@ export function renderUiPage(): string {
       padding-right: 4px;
     }
 
+    .candidate-section {
+      display: grid;
+      gap: 10px;
+    }
+
+    .candidate-section + .candidate-section {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .candidate-section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .candidate-section-title h3 {
+      font-size: 14px;
+      font-weight: 900;
+      overflow-wrap: anywhere;
+    }
+
     .row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
@@ -488,7 +513,8 @@ export function renderUiPage(): string {
       gap: 10px;
     }
 
-    .source-row {
+    .source-row,
+    .server-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px;
@@ -511,6 +537,35 @@ export function renderUiPage(): string {
       color: var(--muted);
       font-size: 12px;
       overflow-wrap: anywhere;
+    }
+
+    .server-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .server-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .server-actions .icon-button {
+      width: 32px;
+      height: 32px;
+    }
+
+    .divider {
+      height: 1px;
+      background: var(--line);
+    }
+
+    .button.danger {
+      background: var(--red);
+    }
+
+    .button.danger:hover:not(:disabled) {
+      background: #991b1b;
     }
 
     .modal-backdrop {
@@ -687,6 +742,7 @@ export function renderUiPage(): string {
       .summary-row,
       .progress-file-row,
       .source-row,
+      .server-row,
       .progress-meta {
         align-items: flex-start;
         flex-direction: column;
@@ -702,6 +758,10 @@ export function renderUiPage(): string {
 
       .form-actions {
         flex-direction: column;
+      }
+
+      .server-actions {
+        width: 100%;
       }
     }
   </style>
@@ -800,6 +860,14 @@ export function renderUiPage(): string {
         <button class="icon-button" id="closeEmbyModal" type="button" title="关闭">×</button>
       </div>
       <form class="modal-body" id="embyForm">
+        <div class="server-list" id="embyServerList">
+          <div class="empty">正在读取 Emby 服务器</div>
+        </div>
+        <div class="form-actions">
+          <button class="button secondary" id="newEmbyServer" type="button">新增服务器</button>
+        </div>
+        <div class="divider"></div>
+        <input id="embyServerId" name="id" type="hidden" />
         <div class="field">
           <label for="embyName">名称</label>
           <input class="input" id="embyName" name="name" autocomplete="off" placeholder="渔云Emby" />
@@ -830,6 +898,7 @@ export function renderUiPage(): string {
         </label>
         <div class="status-line" id="embyFormStatus"></div>
         <div class="form-actions">
+          <button class="button danger" id="deleteEmbyForm" type="button">删除</button>
           <button class="button secondary" id="cancelEmbyForm" type="button">取消</button>
           <button class="button" id="saveEmbyForm" type="submit">保存并验证</button>
         </div>
@@ -875,7 +944,11 @@ export function renderUiPage(): string {
         embyModal: document.getElementById("embyModal"),
         closeEmbyModal: document.getElementById("closeEmbyModal"),
         cancelEmbyForm: document.getElementById("cancelEmbyForm"),
+        newEmbyServer: document.getElementById("newEmbyServer"),
+        deleteEmbyForm: document.getElementById("deleteEmbyForm"),
         embyForm: document.getElementById("embyForm"),
+        embyServerList: document.getElementById("embyServerList"),
+        embyServerId: document.getElementById("embyServerId"),
         embyName: document.getElementById("embyName"),
         embyBaseUrl: document.getElementById("embyBaseUrl"),
         embyUsername: document.getElementById("embyUsername"),
@@ -1095,36 +1168,70 @@ export function renderUiPage(): string {
       function renderCandidates() {
         var candidates = Array.isArray(state.currentCandidates) ? state.currentCandidates : [];
         var selectedId = state.currentTask && state.currentTask.selectedResourceId;
-        els.candidateCount.textContent = candidates.length + " 个候选";
+        var providerCounts = candidates.reduce(function (counts, item) {
+          var provider = item.provider || "unknown";
+          counts[provider] = (counts[provider] || 0) + 1;
+          return counts;
+        }, {});
+        var countText = candidates.length + " 个候选";
+        if (providerCounts.xiaoya || providerCounts.emby) {
+          countText += " · XiaoYa " + Number(providerCounts.xiaoya || 0) + " · Emby " + Number(providerCounts.emby || 0);
+        }
+        els.candidateCount.textContent = countText;
 
         if (!candidates.length) {
           els.resultList.innerHTML = '<div class="empty">' + (state.hasSearched ? "没有候选资源" : "等待搜索") + '</div>';
           return;
         }
 
-        els.resultList.innerHTML = candidates.map(function (item) {
-          var disabled = state.selectingId || selectedId;
-          var isSelected = selectedId === item.id || state.selectingId === item.id;
-          var videosCount = Number(item.videosCount || 0);
-          var buttonText = isSelected ? "\u5df2\u9009\u62e9" : selectionActionLabel(item);
-          var episodeMeta = videosCount > 1
-            ? '<span class="pill">' + videosCount + ' \u96c6</span>'
-            : '';
-          return '<article class="row">' +
-            '<div>' +
-              '<div class="row-title">' + escapeHtml(item.name) + '</div>' +
-              '<div class="row-meta">' +
-                '<span class="pill violet">' + selectionKindLabel(item.kind) + '</span>' +
-                episodeMeta +
-                '<span class="pill">' + escapeHtml(item.size) + '</span>' +
-                '<span class="pill">' + escapeHtml(item.source) + '</span>' +
-                '<span class="pill">' + Number(item.subtitlesCount || 0) + ' \u5b57\u5e55</span>' +
-              '</div>' +
+        var sections = [
+          { provider: "xiaoya", title: "XiaoYa 资源" },
+          { provider: "emby", title: "Emby 资源" },
+          { provider: "openlist", title: "OpenList 资源" },
+          { provider: "local", title: "本地资源" },
+          { provider: "unknown", title: "其他资源" }
+        ];
+        var sectionMarkup = sections.map(function (section) {
+          var items = candidates.filter(function (item) {
+            return (item.provider || "unknown") === section.provider;
+          });
+          if (!items.length) return "";
+          return '<section class="candidate-section">' +
+            '<div class="candidate-section-title">' +
+              '<h3>' + escapeHtml(section.title) + '</h3>' +
+              '<span class="pill blue">' + items.length + ' 个候选</span>' +
             '</div>' +
-            '<button class="select-button" type="button" data-resource-id="' + escapeHtml(item.id) + '"' +
-              (disabled ? ' disabled' : '') + '>' + buttonText + '</button>' +
-          '</article>';
+            items.map(function (item) {
+              return renderCandidateRow(item, selectedId);
+            }).join("") +
+          '</section>';
         }).join("");
+
+        els.resultList.innerHTML = sectionMarkup;
+      }
+
+      function renderCandidateRow(item, selectedId) {
+        var disabled = state.selectingId || selectedId;
+        var isSelected = selectedId === item.id || state.selectingId === item.id;
+        var videosCount = Number(item.videosCount || 0);
+        var buttonText = isSelected ? "\u5df2\u9009\u62e9" : selectionActionLabel(item);
+        var episodeMeta = videosCount > 1
+          ? '<span class="pill">' + videosCount + ' \u96c6</span>'
+          : '';
+        return '<article class="row">' +
+          '<div>' +
+            '<div class="row-title">' + escapeHtml(item.name) + '</div>' +
+            '<div class="row-meta">' +
+              '<span class="pill violet">' + selectionKindLabel(item.kind) + '</span>' +
+              episodeMeta +
+              '<span class="pill">' + escapeHtml(item.size) + '</span>' +
+              '<span class="pill">' + escapeHtml(item.source) + '</span>' +
+              '<span class="pill">' + Number(item.subtitlesCount || 0) + ' \u5b57\u5e55</span>' +
+            '</div>' +
+          '</div>' +
+          '<button class="select-button" type="button" data-resource-id="' + escapeHtml(item.id) + '"' +
+            (disabled ? ' disabled' : '') + '>' + buttonText + '</button>' +
+        '</article>';
       }
 
       function renderProgressLine(progress) {
@@ -1364,29 +1471,83 @@ export function renderUiPage(): string {
         return requestJson("/emby/servers")
           .then(function (servers) {
             state.embyServers = Array.isArray(servers) ? servers : [];
-            prefillEmbyForm();
+            renderEmbyServers();
+            if (!els.embyServerId.value && state.embyServers.length) {
+              editEmbyServer(state.embyServers[0].id);
+            }
           })
           .catch(function (error) {
             addError(error.message);
           });
       }
 
-      function prefillEmbyForm() {
+      function renderEmbyServers() {
+        var servers = Array.isArray(state.embyServers) ? state.embyServers : [];
+        if (!servers.length) {
+          els.embyServerList.innerHTML = '<div class="empty">暂无 Emby 服务器</div>';
+          return;
+        }
+
+        els.embyServerList.innerHTML = servers.map(function (server) {
+          var selected = els.embyServerId.value === server.id;
+          var meta = [
+            server.baseUrl || "",
+            server.enabled === false ? "停用" : "启用",
+            server.proxyUrl ? "代理 " + server.proxyUrl : "",
+            server.readonly ? "配置文件" : "页面配置"
+          ].filter(Boolean).join(" · ");
+
+          return '<div class="server-row">' +
+            '<div>' +
+              '<div class="source-title">' + escapeHtml(server.name || server.id) + '</div>' +
+              '<div class="source-meta">' + escapeHtml(meta) + '</div>' +
+            '</div>' +
+            '<div class="server-actions">' +
+              '<button class="icon-button" type="button" data-edit-emby="' + escapeHtml(server.id) + '" title="编辑">' + (selected ? "✓" : "✎") + '</button>' +
+              '<button class="icon-button" type="button" data-delete-emby="' + escapeHtml(server.id) + '" title="删除">×</button>' +
+            '</div>' +
+          '</div>';
+        }).join("");
+      }
+
+      function resetEmbyForm() {
+        els.embyServerId.value = "";
+        els.embyName.value = "";
+        els.embyBaseUrl.value = "";
+        els.embyUsername.value = "";
+        els.embyPassword.value = "";
+        els.embyProxyUrl.value = "";
+        els.embyAria2ProxyUrl.value = "";
+        els.embyEnabled.checked = true;
+        els.deleteEmbyForm.disabled = true;
+        els.saveEmbyForm.textContent = "保存并验证";
+        els.embyFormStatus.textContent = "";
+        renderEmbyServers();
+      }
+
+      function editEmbyServer(serverId) {
         var server = state.embyServers.find(function (item) {
-          return item.provider === "emby" || item.baseUrl;
-        }) || state.embyServers[0];
+          return item.id === serverId;
+        });
         if (!server) return;
+        els.embyServerId.value = server.id || "";
         els.embyName.value = server.name || "";
         els.embyBaseUrl.value = server.baseUrl || "";
         els.embyUsername.value = server.username || "";
+        els.embyPassword.value = "";
         els.embyProxyUrl.value = server.proxyUrl || "";
         els.embyAria2ProxyUrl.value = server.aria2ProxyUrl || server.proxyUrl || "";
         els.embyEnabled.checked = server.enabled !== false;
+        els.deleteEmbyForm.disabled = false;
+        els.saveEmbyForm.textContent = "更新并验证";
+        els.embyFormStatus.textContent = server.readonly
+          ? "此服务器来自配置文件，保存会创建页面覆盖配置"
+          : "";
+        renderEmbyServers();
       }
 
       function openEmbyModal() {
-        els.embyFormStatus.textContent = "";
-        els.embyPassword.value = "";
+        resetEmbyForm();
         loadEmbyServers().finally(function () {
           els.embyModal.hidden = false;
           els.embyBaseUrl.focus();
@@ -1398,29 +1559,36 @@ export function renderUiPage(): string {
       }
 
       function submitEmbyForm() {
+        var serverId = els.embyServerId.value.trim();
+        var payload = {
+          name: els.embyName.value.trim(),
+          baseUrl: els.embyBaseUrl.value.trim(),
+          username: els.embyUsername.value.trim(),
+          proxyUrl: els.embyProxyUrl.value.trim(),
+          aria2ProxyUrl: els.embyAria2ProxyUrl.value.trim(),
+          enabled: els.embyEnabled.checked,
+          verify: true
+        };
+        if (!serverId || els.embyPassword.value !== "") {
+          payload.password = els.embyPassword.value;
+        }
+
         els.saveEmbyForm.disabled = true;
         els.embyFormStatus.textContent = "正在验证";
 
-        return requestJson("/emby/servers", {
-          method: "POST",
+        return requestJson(serverId ? "/emby/servers/" + encodeURIComponent(serverId) : "/emby/servers", {
+          method: serverId ? "PUT" : "POST",
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({
-            name: els.embyName.value.trim(),
-            baseUrl: els.embyBaseUrl.value.trim(),
-            username: els.embyUsername.value.trim(),
-            password: els.embyPassword.value,
-            proxyUrl: els.embyProxyUrl.value.trim(),
-            aria2ProxyUrl: els.embyAria2ProxyUrl.value.trim(),
-            enabled: els.embyEnabled.checked,
-            verify: true
-          })
+          body: JSON.stringify(payload)
         })
-          .then(function () {
+          .then(function (server) {
             els.embyFormStatus.textContent = "已保存";
-            closeEmbyModal();
-            return Promise.all([loadEmbyServers(), loadSourceHealth()]);
+            els.embyPassword.value = "";
+            return Promise.all([loadEmbyServers(), loadSourceHealth()]).then(function () {
+              editEmbyServer(server.id);
+            });
           })
           .catch(function (error) {
             els.embyFormStatus.textContent = "验证失败";
@@ -1428,6 +1596,29 @@ export function renderUiPage(): string {
           })
           .finally(function () {
             els.saveEmbyForm.disabled = false;
+          });
+      }
+
+      function deleteCurrentEmbyServer() {
+        var serverId = els.embyServerId.value.trim();
+        if (!serverId) return;
+        if (!window.confirm("删除这个 Emby 服务器？")) return;
+
+        els.deleteEmbyForm.disabled = true;
+        els.embyFormStatus.textContent = "正在删除";
+        return requestJson("/emby/servers/" + encodeURIComponent(serverId), {
+          method: "DELETE"
+        })
+          .then(function () {
+            resetEmbyForm();
+            return Promise.all([loadEmbyServers(), loadSourceHealth()]);
+          })
+          .catch(function (error) {
+            els.embyFormStatus.textContent = "删除失败";
+            addError(error.message);
+          })
+          .finally(function () {
+            els.deleteEmbyForm.disabled = false;
           });
       }
 
@@ -1614,6 +1805,31 @@ export function renderUiPage(): string {
 
       els.cancelEmbyForm.addEventListener("click", function () {
         closeEmbyModal();
+      });
+
+      els.newEmbyServer.addEventListener("click", function () {
+        resetEmbyForm();
+        els.embyBaseUrl.focus();
+      });
+
+      els.deleteEmbyForm.addEventListener("click", function () {
+        deleteCurrentEmbyServer();
+      });
+
+      els.embyServerList.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        var editButton = target.closest("[data-edit-emby]");
+        if (editButton) {
+          editEmbyServer(editButton.getAttribute("data-edit-emby"));
+          return;
+        }
+
+        var deleteButton = target.closest("[data-delete-emby]");
+        if (deleteButton) {
+          editEmbyServer(deleteButton.getAttribute("data-delete-emby"));
+          deleteCurrentEmbyServer();
+        }
       });
 
       els.embyModal.addEventListener("click", function (event) {

@@ -33,6 +33,7 @@ interface EmbyServerConfig {
   proxyUrl?: string;
   aria2ProxyUrl?: string;
   readonly?: boolean;
+  deleted?: boolean;
 }
 
 interface EmbyServerInput {
@@ -45,6 +46,7 @@ interface EmbyServerInput {
   proxyUrl?: string;
   aria2ProxyUrl?: string;
   verify?: boolean;
+  deleted?: boolean;
 }
 
 interface EmbyAuthSession {
@@ -133,7 +135,7 @@ export class EmbyService {
   );
   private readonly maxEpisodesPerSeries = readPositiveInteger(
     process.env.EMBY_MAX_EPISODES_PER_SERIES,
-    300,
+    3000,
     1
   );
   private readonly clientName = process.env.EMBY_CLIENT_NAME || "MediaBrain";
@@ -163,7 +165,9 @@ export class EmbyService {
   }
 
   listServers(): EmbyServerSummary[] {
-    return this.servers.map((server) => this.toServerSummary(server));
+    return this.servers
+      .filter((server) => !server.deleted)
+      .map((server) => this.toServerSummary(server));
   }
 
   async addServer(input: EmbyServerInput): Promise<EmbyServerSummary> {
@@ -187,6 +191,60 @@ export class EmbyService {
 
     this.persistEditableServers();
     return this.toServerSummary(server);
+  }
+
+  async updateServer(id: string, input: EmbyServerInput): Promise<EmbyServerSummary> {
+    const existing = this.servers.find((server) => server.id === id && !server.deleted);
+    if (!existing) {
+      throw new Error(`Emby server ${id} not found`);
+    }
+
+    const server = this.normalizeServerInput({
+      id,
+      name: input.name ?? existing.name,
+      baseUrl: input.baseUrl ?? existing.baseUrl,
+      username: input.username ?? existing.username,
+      password: input.password ?? existing.password,
+      enabled: input.enabled ?? existing.enabled,
+      proxyUrl: input.proxyUrl ?? existing.proxyUrl,
+      aria2ProxyUrl: input.aria2ProxyUrl ?? existing.aria2ProxyUrl,
+      verify: input.verify
+    });
+
+    if (input.verify !== false) {
+      await this.verifyConfig(server);
+    }
+
+    const index = this.servers.findIndex((item) => item.id === id);
+    this.servers[index] = server;
+    this.authSessions.delete(id);
+    this.persistEditableServers();
+    return this.toServerSummary(server);
+  }
+
+  deleteServer(id: string): EmbyServerSummary {
+    const existing = this.servers.find((server) => server.id === id && !server.deleted);
+    if (!existing) {
+      throw new Error(`Emby server ${id} not found`);
+    }
+
+    const index = this.servers.findIndex((server) => server.id === id);
+    if (existing.readonly || this.isEnvironmentServer(id)) {
+      const tombstone: EmbyServerConfig = {
+        ...existing,
+        enabled: false,
+        readonly: false,
+        deleted: true,
+        password: ""
+      };
+      this.servers[index] = tombstone;
+    } else {
+      this.servers.splice(index, 1);
+    }
+
+    this.authSessions.delete(id);
+    this.persistEditableServers();
+    return this.toServerSummary(existing);
   }
 
   async health(): Promise<SourceHealth[]> {
@@ -316,19 +374,38 @@ export class EmbyService {
 
     const items = body.Items || [];
     const resources: OpenListResource[] = [];
-    let expandedSeries = 0;
+    const seriesIdsToExpand = new Set<string>();
+    const fallbackItems: EmbyItem[] = [];
 
     for (const item of items) {
-      if (item.Type === "Series" && item.Id && expandedSeries < this.maxSeriesExpansions) {
-        expandedSeries += 1;
-        const episodes = await this.fetchSeriesEpisodes(server, session, item.Id).catch((error) => {
-          console.log(`[EmbyService] series expansion ${item.Name || item.Id} failed: ${formatError(error)}`);
-          return [];
-        });
-        resources.push(...episodes.flatMap((episode) => this.mapItemToResource(server, episode)));
+      if (item.Type === "Series" && item.Id) {
+        seriesIdsToExpand.add(item.Id);
         continue;
       }
 
+      if (item.Type === "Episode" && item.SeriesId) {
+        seriesIdsToExpand.add(item.SeriesId);
+        continue;
+      }
+
+      fallbackItems.push(item);
+    }
+
+    let expandedSeries = 0;
+    for (const seriesId of seriesIdsToExpand) {
+      if (expandedSeries >= this.maxSeriesExpansions) {
+        break;
+      }
+
+      expandedSeries += 1;
+      const episodes = await this.fetchSeriesEpisodes(server, session, seriesId).catch((error) => {
+        console.log(`[EmbyService] series expansion ${seriesId} failed: ${formatError(error)}`);
+        return [];
+      });
+      resources.push(...episodes.flatMap((episode) => this.mapItemToResource(server, episode)));
+    }
+
+    for (const item of fallbackItems) {
       resources.push(...this.mapItemToResource(server, item));
     }
 
@@ -822,7 +899,7 @@ export class EmbyService {
 
   private findServer(serverId: string): EmbyServerConfig {
     const server = this.servers.find((item) => item.id === serverId);
-    if (!server || !server.enabled) {
+    if (!server || !server.enabled || server.deleted) {
       throw new Error(`Emby server ${serverId} is not configured or disabled`);
     }
 
@@ -830,17 +907,18 @@ export class EmbyService {
   }
 
   private getEnabledServers(): EmbyServerConfig[] {
-    return this.servers.filter((server) => server.enabled);
+    return this.servers.filter((server) => server.enabled && !server.deleted);
   }
 
   private loadServers(): EmbyServerConfig[] {
-    const servers = [...this.loadEnvServers(), ...this.loadRegistryServers()];
     const deduped = new Map<string, EmbyServerConfig>();
 
-    for (const server of servers) {
-      if (!deduped.has(server.id)) {
-        deduped.set(server.id, server);
-      }
+    for (const server of this.loadEnvServers()) {
+      deduped.set(server.id, server);
+    }
+
+    for (const server of this.loadRegistryServers()) {
+      deduped.set(server.id, server);
     }
 
     return Array.from(deduped.values());
@@ -907,7 +985,8 @@ export class EmbyService {
         password: server.password,
         enabled: server.enabled,
         proxyUrl: server.proxyUrl,
-        aria2ProxyUrl: server.aria2ProxyUrl
+        aria2ProxyUrl: server.aria2ProxyUrl,
+        deleted: server.deleted
       }));
     mkdirSync(path.dirname(this.registryPath), { recursive: true });
     writeFileSync(this.registryPath, `${JSON.stringify(editableServers, null, 2)}\n`, "utf8");
@@ -927,7 +1006,8 @@ export class EmbyService {
       password,
       enabled: input.enabled !== false,
       proxyUrl: optionalString(input.proxyUrl),
-      aria2ProxyUrl: optionalString(input.aria2ProxyUrl || input.proxyUrl)
+      aria2ProxyUrl: optionalString(input.aria2ProxyUrl || input.proxyUrl),
+      deleted: input.deleted === true
     };
   }
 
@@ -943,6 +1023,10 @@ export class EmbyService {
       aria2ProxyUrl: server.aria2ProxyUrl,
       readonly: server.readonly
     };
+  }
+
+  private isEnvironmentServer(serverId: string): boolean {
+    return this.loadEnvServers().some((server) => server.id === serverId);
   }
 }
 
