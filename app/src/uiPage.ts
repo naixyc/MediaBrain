@@ -52,7 +52,7 @@ export function renderUiPage(): string {
     }
 
     .shell {
-      width: min(1440px, calc(100% - 40px));
+      width: min(1120px, calc(100% - 40px));
       margin: 0 auto;
       padding: 28px 0 40px;
     }
@@ -106,7 +106,7 @@ export function renderUiPage(): string {
 
     .layout {
       display: grid;
-      grid-template-columns: minmax(0, 1.3fr) minmax(340px, 0.7fr);
+      grid-template-columns: minmax(0, 1fr);
       gap: 18px;
       align-items: start;
     }
@@ -208,21 +208,22 @@ export function renderUiPage(): string {
     }
 
     .result-list {
-      margin-top: 16px;
-      max-height: 520px;
-      overflow: auto;
-      padding-right: 4px;
+      max-height: none;
+      overflow: visible;
+      padding-right: 0;
     }
 
     .candidate-section {
       display: grid;
-      gap: 10px;
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      overflow: hidden;
     }
 
     .candidate-section + .candidate-section {
-      margin-top: 16px;
-      padding-top: 14px;
-      border-top: 1px solid var(--line);
+      margin-top: 4px;
     }
 
     .candidate-section-title {
@@ -231,12 +232,22 @@ export function renderUiPage(): string {
       justify-content: space-between;
       gap: 10px;
       min-width: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
     }
 
     .candidate-section-title h3 {
       font-size: 14px;
       font-weight: 900;
       overflow-wrap: anywhere;
+    }
+
+    .candidate-section-body {
+      display: grid;
+      gap: 10px;
+      max-height: 420px;
+      overflow: auto;
+      padding: 12px;
     }
 
     .row {
@@ -781,7 +792,6 @@ export function renderUiPage(): string {
         <section class="panel">
           <div class="panel-header">
             <h2>搜索</h2>
-            <span class="pill blue" id="candidateCount">0 个候选</span>
           </div>
           <div class="panel-body">
             <form class="search-form" id="searchForm">
@@ -789,6 +799,15 @@ export function renderUiPage(): string {
               <button class="button" id="searchButton" type="submit">搜索</button>
             </form>
             <div class="status-line" id="searchStatus"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>候选资源</h2>
+            <span class="pill blue" id="candidateCount">0 个候选</span>
+          </div>
+          <div class="panel-body">
             <div class="result-list" id="resultList">
               <div class="empty">等待搜索</div>
             </div>
@@ -1185,8 +1204,8 @@ export function renderUiPage(): string {
         }
 
         var sections = [
-          { provider: "xiaoya", title: "XiaoYa 资源" },
           { provider: "emby", title: "Emby 资源" },
+          { provider: "xiaoya", title: "XiaoYa 资源" },
           { provider: "openlist", title: "OpenList 资源" },
           { provider: "local", title: "本地资源" },
           { provider: "unknown", title: "其他资源" }
@@ -1201,9 +1220,11 @@ export function renderUiPage(): string {
               '<h3>' + escapeHtml(section.title) + '</h3>' +
               '<span class="pill blue">' + items.length + ' 个候选</span>' +
             '</div>' +
-            items.map(function (item) {
-              return renderCandidateRow(item, selectedId);
-            }).join("") +
+            '<div class="candidate-section-body">' +
+              items.map(function (item) {
+                return renderCandidateRow(item, selectedId);
+              }).join("") +
+            '</div>' +
           '</section>';
         }).join("");
 
