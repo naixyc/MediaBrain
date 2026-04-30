@@ -1,8 +1,9 @@
 import type { DownloadTarget, OpenListResource } from "../types";
+import type { EmbyService } from "./embyService";
 import type { OpenListService } from "./openListService";
 import type { XiaoyaService } from "./xiaoyaService";
 
-type SearchProvider = "auto" | "xiaoya" | "openlist" | "hybrid";
+type SearchProvider = "auto" | "xiaoya" | "openlist" | "emby" | "hybrid";
 
 export class MediaResourceService {
   private readonly provider = (
@@ -13,7 +14,8 @@ export class MediaResourceService {
 
   constructor(
     private readonly openListService: OpenListService,
-    private readonly xiaoyaService: XiaoyaService
+    private readonly xiaoyaService: XiaoyaService,
+    private readonly embyService: EmbyService
   ) {}
 
   async searchAll(keyword: string): Promise<OpenListResource[]> {
@@ -27,23 +29,37 @@ export class MediaResourceService {
       return this.openListService.searchAll(keyword);
     }
 
+    if (provider === "emby") {
+      return this.embyService.searchAll(keyword);
+    }
+
     const [xiaoyaResources, openListResources] = await Promise.all([
       this.xiaoyaService.isConfigured() ? this.xiaoyaService.searchAll(keyword) : Promise.resolve([]),
       this.openListService.searchAll(keyword)
     ]);
-    return this.dedupeResources([...xiaoyaResources, ...openListResources]);
+    const embyResources = this.embyService.isConfigured()
+      ? await this.embyService.searchAll(keyword)
+      : [];
+    return this.dedupeResources([...xiaoyaResources, ...openListResources, ...embyResources]);
   }
 
   canCreateDirectDownloadTargets(resources: OpenListResource[]): boolean {
-    return resources.length > 0 && resources.every((resource) => resource.provider === "xiaoya");
+    return (
+      (resources.length > 0 && resources.every((resource) => resource.provider === "xiaoya")) ||
+      this.embyService.canCreateDownloadTargets(resources)
+    );
   }
 
   async createDirectDownloadTargets(resources: OpenListResource[]): Promise<DownloadTarget[]> {
-    if (!this.canCreateDirectDownloadTargets(resources)) {
-      throw new Error("direct download is only supported for XiaoYa resources");
+    if (resources.every((resource) => resource.provider === "xiaoya")) {
+      return this.xiaoyaService.createDownloadTargets(resources);
     }
 
-    return this.xiaoyaService.createDownloadTargets(resources);
+    if (this.embyService.canCreateDownloadTargets(resources)) {
+      return this.embyService.createDownloadTargets(resources);
+    }
+
+    throw new Error("direct download is only supported for XiaoYa or Emby resources");
   }
 
   async verifyXiaoyaMe(): Promise<unknown> {
@@ -55,7 +71,12 @@ export class MediaResourceService {
       return this.xiaoyaService.isConfigured() ? "xiaoya" : "openlist";
     }
 
-    if (this.provider === "xiaoya" || this.provider === "openlist" || this.provider === "hybrid") {
+    if (
+      this.provider === "xiaoya" ||
+      this.provider === "openlist" ||
+      this.provider === "emby" ||
+      this.provider === "hybrid"
+    ) {
       return this.provider;
     }
 

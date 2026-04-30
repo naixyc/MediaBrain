@@ -288,6 +288,7 @@ export class TaskOrchestrator {
         size: formatFileSize(sizeBytes),
         sizeBytes,
         source: group.source,
+        provider: group.video.provider,
         kind: group.kind,
         videosCount: group.videos.length,
         subtitlesCount: group.subtitles.length

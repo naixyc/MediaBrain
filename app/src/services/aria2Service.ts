@@ -69,7 +69,8 @@ export class Aria2Service {
           dir: download.dir,
           out: download.out,
           continue: true,
-          ...(download.headers ? { header: download.headers } : {})
+          ...(download.headers ? { header: download.headers } : {}),
+          ...(download.aria2Options || {})
         }
       ]);
       gids.push(gid);

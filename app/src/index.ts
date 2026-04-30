@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { AIServiceClient } from "./services/aiServiceClient";
 import { Aria2Service } from "./services/aria2Service";
+import { EmbyService } from "./services/embyService";
 import { HermesClient } from "./services/hermesClient";
 import { MediaResourceService } from "./services/mediaResourceService";
 import { OpenListService } from "./services/openListService";
@@ -14,7 +15,8 @@ import { renderUiPage } from "./uiPage";
 const port = Number(process.env.PORT ?? process.env.APP_PORT ?? 42180);
 const openListService = new OpenListService();
 const xiaoyaService = new XiaoyaService();
-const mediaResourceService = new MediaResourceService(openListService, xiaoyaService);
+const embyService = new EmbyService();
+const mediaResourceService = new MediaResourceService(openListService, xiaoyaService, embyService);
 const resourceSelectionService = new ResourceSelectionService(mediaResourceService);
 const transferService = new TransferService();
 const taskOrchestrator = new TaskOrchestrator(
@@ -33,6 +35,17 @@ interface SelectResourceRequest {
   taskId?: string;
   resourceId?: string;
   keyword?: string;
+}
+
+interface CreateEmbyServerRequest {
+  name?: string;
+  baseUrl?: string;
+  username?: string;
+  password?: string;
+  enabled?: boolean;
+  proxyUrl?: string;
+  aria2ProxyUrl?: string;
+  verify?: boolean;
 }
 
 const server = createServer(async (request, response) => {
@@ -55,6 +68,9 @@ const server = createServer(async (request, response) => {
           "GET /tasks",
           "GET /openlist/me",
           "GET /xiaoya/me",
+          "GET /sources/health",
+          "GET /emby/servers",
+          "POST /emby/servers",
           "GET /resources/search?keyword=xxx",
           "POST /resources/select"
         ]
@@ -113,6 +129,25 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/sources/health") {
+      const xiaoyaHealth = await createXiaoyaHealth();
+      const embyHealth = await embyService.health();
+      sendJson(response, 200, [xiaoyaHealth, ...embyHealth]);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/emby/servers") {
+      sendJson(response, 200, embyService.listServers());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/emby/servers") {
+      const body = await readJsonBody<CreateEmbyServerRequest>(request);
+      const serverSummary = await embyService.addServer(body);
+      sendJson(response, 201, serverSummary);
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/resources/search") {
       const keyword = url.searchParams.get("keyword") || "";
       const resources = await resourceSelectionService.search(keyword);
@@ -163,3 +198,37 @@ const server = createServer(async (request, response) => {
 server.listen(port, "0.0.0.0", () => {
   console.log(`MediaBrain API service listening on port ${port}`);
 });
+
+async function createXiaoyaHealth() {
+  if (!xiaoyaService.isConfigured()) {
+    return {
+      id: "xiaoya",
+      name: "XiaoYa",
+      provider: "xiaoya" as const,
+      configured: false,
+      healthy: false,
+      detail: "XIAOYA_BASE_URL is not configured"
+    };
+  }
+
+  try {
+    await xiaoyaService.verifyMe();
+    return {
+      id: "xiaoya",
+      name: "XiaoYa",
+      provider: "xiaoya" as const,
+      configured: true,
+      healthy: true,
+      detail: "ok"
+    };
+  } catch (error) {
+    return {
+      id: "xiaoya",
+      name: "XiaoYa",
+      provider: "xiaoya" as const,
+      configured: true,
+      healthy: false,
+      detail: error instanceof Error ? error.message : String(error)
+    };
+  }
+}

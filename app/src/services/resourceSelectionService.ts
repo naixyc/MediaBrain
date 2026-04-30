@@ -36,6 +36,7 @@ export class ResourceSelectionService {
         size: formatFileSize(sizeBytes),
         sizeBytes,
         source: resource.source,
+        provider: resource.video.provider,
         kind: resource.kind,
         videosCount: resource.videos.length,
         subtitlesCount: resource.subtitles.length

@@ -1,5 +1,42 @@
 export type ResourceType = "video" | "subtitle";
-export type ResourceProvider = "openlist" | "xiaoya" | "local";
+export type ResourceProvider = "openlist" | "xiaoya" | "emby" | "local";
+
+export interface EmbyResourceMetadata {
+  serverId: string;
+  itemId: string;
+  itemType: "Movie" | "Episode";
+  mediaSourceId?: string;
+  container?: string;
+  seriesId?: string;
+  seriesName?: string;
+  seasonId?: string;
+  seasonName?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  productionYear?: number;
+}
+
+export interface SourceHealth {
+  id: string;
+  name: string;
+  provider: ResourceProvider;
+  configured: boolean;
+  healthy: boolean;
+  detail?: string;
+  proxyUrl?: string;
+}
+
+export interface EmbyServerSummary {
+  id: string;
+  name: string;
+  baseUrl: string;
+  username: string;
+  enabled: boolean;
+  hasPassword: boolean;
+  proxyUrl?: string;
+  aria2ProxyUrl?: string;
+  readonly?: boolean;
+}
 
 export interface OpenListResource {
   id: string;
@@ -12,6 +49,7 @@ export interface OpenListResource {
   collectionFolder?: string;
   collectionName?: string;
   provider?: ResourceProvider;
+  emby?: EmbyResourceMetadata;
 }
 
 export type ResourceSelectionKind = "collection" | "season" | "single";
@@ -33,6 +71,7 @@ export interface ResourceSearchItem {
   size: string;
   sizeBytes: number;
   source: string;
+  provider?: ResourceProvider;
   kind: ResourceSelectionKind;
   videosCount: number;
   subtitlesCount: number;
@@ -50,6 +89,7 @@ export interface DownloadTarget {
   out: string;
   expectedSize?: number;
   headers?: string[];
+  aria2Options?: Record<string, unknown>;
 }
 
 export interface DownloadProgress {

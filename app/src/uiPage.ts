@@ -483,6 +483,109 @@ export function renderUiPage(): string {
       gap: 8px;
     }
 
+    .source-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .source-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: #ffffff;
+    }
+
+    .source-title {
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .source-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: rgba(15, 23, 42, 0.38);
+    }
+
+    .modal-backdrop[hidden] {
+      display: none;
+    }
+
+    .modal {
+      width: min(560px, 100%);
+      max-height: min(720px, calc(100vh - 36px));
+      overflow: auto;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      box-shadow: 0 24px 72px rgba(15, 23, 42, 0.24);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-header h2 {
+      font-size: 16px;
+    }
+
+    .modal-body {
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label,
+    .checkbox-row {
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .checkbox-row input {
+      width: 16px;
+      height: 16px;
+    }
+
+    .form-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 2px;
+    }
+
     .icon-button {
       width: 34px;
       height: 34px;
@@ -583,6 +686,7 @@ export function renderUiPage(): string {
 
       .summary-row,
       .progress-file-row,
+      .source-row,
       .progress-meta {
         align-items: flex-start;
         flex-direction: column;
@@ -594,6 +698,10 @@ export function renderUiPage(): string {
 
       .progress-file-name {
         white-space: normal;
+      }
+
+      .form-actions {
+        flex-direction: column;
       }
     }
   </style>
@@ -645,6 +753,21 @@ export function renderUiPage(): string {
       <div class="stack">
         <section class="panel">
           <div class="panel-header">
+            <h2>资源状态</h2>
+            <div class="toolbar">
+              <button class="icon-button" id="refreshSources" type="button" title="刷新">↻</button>
+              <button class="icon-button" id="manageEmby" type="button" title="管理 Emby">＋</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="source-list" id="sourceStatusList">
+              <div class="empty">正在检测资源状态</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
             <h2>整理</h2>
             <span class="pill" id="organizeState">待处理</span>
           </div>
@@ -670,6 +793,50 @@ export function renderUiPage(): string {
     </div>
   </main>
 
+  <div class="modal-backdrop" id="embyModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="embyModalTitle">
+      <div class="modal-header">
+        <h2 id="embyModalTitle">Emby 服务器</h2>
+        <button class="icon-button" id="closeEmbyModal" type="button" title="关闭">×</button>
+      </div>
+      <form class="modal-body" id="embyForm">
+        <div class="field">
+          <label for="embyName">名称</label>
+          <input class="input" id="embyName" name="name" autocomplete="off" placeholder="渔云Emby" />
+        </div>
+        <div class="field">
+          <label for="embyBaseUrl">服务器地址</label>
+          <input class="input" id="embyBaseUrl" name="baseUrl" autocomplete="off" placeholder="https://example.com:443" required />
+        </div>
+        <div class="field">
+          <label for="embyUsername">用户名</label>
+          <input class="input" id="embyUsername" name="username" autocomplete="username" required />
+        </div>
+        <div class="field">
+          <label for="embyPassword">密码</label>
+          <input class="input" id="embyPassword" name="password" type="password" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="embyProxyUrl">API 代理</label>
+          <input class="input" id="embyProxyUrl" name="proxyUrl" autocomplete="off" placeholder="http://192.168.1.11:1080" />
+        </div>
+        <div class="field">
+          <label for="embyAria2ProxyUrl">下载代理</label>
+          <input class="input" id="embyAria2ProxyUrl" name="aria2ProxyUrl" autocomplete="off" placeholder="http://192.168.1.11:1080" />
+        </div>
+        <label class="checkbox-row">
+          <input id="embyEnabled" name="enabled" type="checkbox" checked />
+          启用
+        </label>
+        <div class="status-line" id="embyFormStatus"></div>
+        <div class="form-actions">
+          <button class="button secondary" id="cancelEmbyForm" type="button">取消</button>
+          <button class="button" id="saveEmbyForm" type="submit">保存并验证</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
   <script>
     (function () {
       var state = {
@@ -681,6 +848,8 @@ export function renderUiPage(): string {
         tasks: [],
         expandedTasks: {},
         errors: [],
+        sourceHealth: [],
+        embyServers: [],
         polling: null,
         searching: false,
         selectingId: null
@@ -699,7 +868,23 @@ export function renderUiPage(): string {
         organizeState: document.getElementById("organizeState"),
         organizeList: document.getElementById("organizeList"),
         errorList: document.getElementById("errorList"),
-        clearErrors: document.getElementById("clearErrors")
+        clearErrors: document.getElementById("clearErrors"),
+        sourceStatusList: document.getElementById("sourceStatusList"),
+        refreshSources: document.getElementById("refreshSources"),
+        manageEmby: document.getElementById("manageEmby"),
+        embyModal: document.getElementById("embyModal"),
+        closeEmbyModal: document.getElementById("closeEmbyModal"),
+        cancelEmbyForm: document.getElementById("cancelEmbyForm"),
+        embyForm: document.getElementById("embyForm"),
+        embyName: document.getElementById("embyName"),
+        embyBaseUrl: document.getElementById("embyBaseUrl"),
+        embyUsername: document.getElementById("embyUsername"),
+        embyPassword: document.getElementById("embyPassword"),
+        embyProxyUrl: document.getElementById("embyProxyUrl"),
+        embyAria2ProxyUrl: document.getElementById("embyAria2ProxyUrl"),
+        embyEnabled: document.getElementById("embyEnabled"),
+        embyFormStatus: document.getElementById("embyFormStatus"),
+        saveEmbyForm: document.getElementById("saveEmbyForm")
       };
 
       var STATUS_WAITING = "\u7b49\u5f85\u9009\u62e9\u8d44\u6e90";
@@ -1125,11 +1310,125 @@ export function renderUiPage(): string {
         }).join("");
       }
 
+      function sourceProviderLabel(provider) {
+        if (provider === "xiaoya") return "XiaoYa";
+        if (provider === "emby") return "Emby";
+        if (provider === "openlist") return "OpenList";
+        return provider || "资源";
+      }
+
+      function renderSourceHealth() {
+        var items = Array.isArray(state.sourceHealth) ? state.sourceHealth : [];
+        if (!items.length) {
+          els.sourceStatusList.innerHTML = '<div class="empty">暂无资源状态</div>';
+          return;
+        }
+
+        els.sourceStatusList.innerHTML = items.map(function (item) {
+          var statusText = item.healthy ? "正常" : (item.configured ? "异常" : "未配置");
+          var pillClassName = item.healthy ? "green" : (item.configured ? "red" : "amber");
+          var meta = [];
+          meta.push(sourceProviderLabel(item.provider));
+          if (item.proxyUrl) meta.push("代理 " + item.proxyUrl);
+          if (item.detail) meta.push(item.detail);
+          return '<div class="source-row">' +
+            '<div>' +
+              '<div class="source-title">' + escapeHtml(item.name || item.id) + '</div>' +
+              '<div class="source-meta">' + escapeHtml(meta.join(" · ")) + '</div>' +
+            '</div>' +
+            '<span class="pill ' + pillClassName + '">' + escapeHtml(statusText) + '</span>' +
+          '</div>';
+        }).join("");
+      }
+
       function renderAll() {
         renderCandidates();
         renderTasks();
         renderOrganize();
         renderErrors();
+        renderSourceHealth();
+      }
+
+      function loadSourceHealth() {
+        return requestJson("/sources/health")
+          .then(function (items) {
+            state.sourceHealth = Array.isArray(items) ? items : [];
+            renderSourceHealth();
+          })
+          .catch(function (error) {
+            addError(error.message);
+          });
+      }
+
+      function loadEmbyServers() {
+        return requestJson("/emby/servers")
+          .then(function (servers) {
+            state.embyServers = Array.isArray(servers) ? servers : [];
+            prefillEmbyForm();
+          })
+          .catch(function (error) {
+            addError(error.message);
+          });
+      }
+
+      function prefillEmbyForm() {
+        var server = state.embyServers.find(function (item) {
+          return item.provider === "emby" || item.baseUrl;
+        }) || state.embyServers[0];
+        if (!server) return;
+        els.embyName.value = server.name || "";
+        els.embyBaseUrl.value = server.baseUrl || "";
+        els.embyUsername.value = server.username || "";
+        els.embyProxyUrl.value = server.proxyUrl || "";
+        els.embyAria2ProxyUrl.value = server.aria2ProxyUrl || server.proxyUrl || "";
+        els.embyEnabled.checked = server.enabled !== false;
+      }
+
+      function openEmbyModal() {
+        els.embyFormStatus.textContent = "";
+        els.embyPassword.value = "";
+        loadEmbyServers().finally(function () {
+          els.embyModal.hidden = false;
+          els.embyBaseUrl.focus();
+        });
+      }
+
+      function closeEmbyModal() {
+        els.embyModal.hidden = true;
+      }
+
+      function submitEmbyForm() {
+        els.saveEmbyForm.disabled = true;
+        els.embyFormStatus.textContent = "正在验证";
+
+        return requestJson("/emby/servers", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            name: els.embyName.value.trim(),
+            baseUrl: els.embyBaseUrl.value.trim(),
+            username: els.embyUsername.value.trim(),
+            password: els.embyPassword.value,
+            proxyUrl: els.embyProxyUrl.value.trim(),
+            aria2ProxyUrl: els.embyAria2ProxyUrl.value.trim(),
+            enabled: els.embyEnabled.checked,
+            verify: true
+          })
+        })
+          .then(function () {
+            els.embyFormStatus.textContent = "已保存";
+            closeEmbyModal();
+            return Promise.all([loadEmbyServers(), loadSourceHealth()]);
+          })
+          .catch(function (error) {
+            els.embyFormStatus.textContent = "验证失败";
+            addError(error.message);
+          })
+          .finally(function () {
+            els.saveEmbyForm.disabled = false;
+          });
       }
 
       function syncTask(task) {
@@ -1301,8 +1600,37 @@ export function renderUiPage(): string {
         renderErrors();
       });
 
+      els.refreshSources.addEventListener("click", function () {
+        loadSourceHealth();
+      });
+
+      els.manageEmby.addEventListener("click", function () {
+        openEmbyModal();
+      });
+
+      els.closeEmbyModal.addEventListener("click", function () {
+        closeEmbyModal();
+      });
+
+      els.cancelEmbyForm.addEventListener("click", function () {
+        closeEmbyModal();
+      });
+
+      els.embyModal.addEventListener("click", function (event) {
+        if (event.target === els.embyModal) {
+          closeEmbyModal();
+        }
+      });
+
+      els.embyForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        submitEmbyForm();
+      });
+
       updateClock();
       window.setInterval(updateClock, 30000);
+      loadSourceHealth();
+      loadEmbyServers();
       loadTasks();
     })();
   </script>
