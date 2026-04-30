@@ -28,9 +28,24 @@ export class Aria2Service {
   private readonly rpcUrl = process.env.ARIA2_RPC_URL;
   private readonly secret = process.env.ARIA2_RPC_SECRET;
   private readonly pollIntervalMs = readPositiveInteger(process.env.ARIA2_POLL_INTERVAL_MS, 2000, 250);
+  private readonly rpcRequestTimeoutMs = readPositiveInteger(
+    process.env.ARIA2_RPC_TIMEOUT_MS,
+    15000,
+    1000
+  );
   private readonly noProgressTimeoutMs = readPositiveInteger(
     process.env.ARIA2_DOWNLOAD_TIMEOUT_MS,
     30 * 60 * 1000,
+    0
+  );
+  private readonly statusPollRetryAttempts = readPositiveInteger(
+    process.env.ARIA2_STATUS_POLL_RETRY_ATTEMPTS,
+    3,
+    1
+  );
+  private readonly statusPollRetryDelayMs = readPositiveInteger(
+    process.env.ARIA2_STATUS_POLL_RETRY_DELAY_MS,
+    1000,
     0
   );
 
@@ -106,10 +121,10 @@ export class Aria2Service {
 
     while (pending.size > 0) {
       for (const gid of Array.from(pending)) {
-        const status = await this.call<Aria2TellStatus>(
-          "aria2.tellStatus",
-          [gid, ["status", "errorMessage", "totalLength", "completedLength", "downloadSpeed"]]
-        );
+        const status = await this.tellStatusWithRetry(gid);
+        if (!status) {
+          continue;
+        }
 
         console.log(`[Aria2Service] gid ${gid} status: ${status.status}`);
         const download = downloads[gids.indexOf(gid)];
@@ -165,24 +180,56 @@ export class Aria2Service {
     }
   }
 
+  private async tellStatusWithRetry(gid: string): Promise<Aria2TellStatus | null> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= this.statusPollRetryAttempts; attempt += 1) {
+      try {
+        return await this.call<Aria2TellStatus>(
+          "aria2.tellStatus",
+          [gid, ["status", "errorMessage", "totalLength", "completedLength", "downloadSpeed"]]
+        );
+      } catch (error) {
+        lastError = error;
+        if (attempt < this.statusPollRetryAttempts && this.statusPollRetryDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.statusPollRetryDelayMs));
+        }
+      }
+    }
+
+    console.log(
+      `[Aria2Service] gid ${gid} status poll failed after ${this.statusPollRetryAttempts} attempts: ${formatError(lastError)}`
+    );
+    return null;
+  }
+
   private async call<T>(method: string, params: unknown[]): Promise<T> {
     if (!this.rpcUrl) {
       throw new Error("ARIA2_RPC_URL is not configured");
     }
 
     const rpcParams = this.secret ? [`token:${this.secret}`, ...params] : params;
-    const response = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: `${Date.now()}-${Math.random()}`,
-        method,
-        params: rpcParams
-      })
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.rpcRequestTimeoutMs);
+    let response: Response;
+
+    try {
+      response = await fetch(this.rpcUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: `${Date.now()}-${Math.random()}`,
+          method,
+          params: rpcParams
+        }),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const body = (await response.json()) as Aria2Response<T>;
 
@@ -324,6 +371,10 @@ function formatDuration(milliseconds: number): string {
 
   const hours = Math.round(minutes / 60);
   return `${hours}h`;
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function formatBytes(bytes: number): string {
