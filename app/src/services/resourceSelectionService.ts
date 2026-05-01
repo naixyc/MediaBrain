@@ -32,14 +32,15 @@ export class ResourceSelectionService {
 
     return groupedResources.map((resource) => {
       const sizeBytes = sumResourceSizes([...resource.videos, ...resource.subtitles]);
+      const provider = resource.video.provider;
 
       return {
         id: resource.id,
         name: resource.name,
-        size: formatFileSize(sizeBytes),
+        size: provider === "xiaoya" ? "选择后估算" : formatFileSize(sizeBytes),
         sizeBytes,
         source: resource.source,
-        provider: resource.video.provider,
+        provider,
         kind: resource.kind,
         videosCount: resource.videos.length,
         subtitlesCount: resource.subtitles.length

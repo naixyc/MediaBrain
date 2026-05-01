@@ -175,6 +175,25 @@ export class Aria2Service {
     return downloads.map((download) => download.outputPath);
   }
 
+  async cancelDownloads(gids: string[]): Promise<void> {
+    if (!this.rpcUrl || gids.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      gids.map(async (gid) => {
+        try {
+          await this.call<string>("aria2.remove", [gid]);
+        } catch (error) {
+          const message = formatError(error);
+          if (!/not found|not active|already/i.test(message)) {
+            await this.call<string>("aria2.forceRemove", [gid]);
+          }
+        }
+      })
+    );
+  }
+
   private async validateDownloads(downloads: DownloadTarget[]): Promise<void> {
     for (const download of downloads) {
       await validateDownloadedFile(download);

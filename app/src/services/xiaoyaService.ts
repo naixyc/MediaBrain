@@ -45,7 +45,7 @@ export class XiaoyaService {
   private readonly password = process.env.XIAOYA_PASSWORD;
   private readonly pathPassword = process.env.XIAOYA_PATH_PASSWORD || "";
   private readonly shouldLookupFileSizes =
-    (process.env.XIAOYA_LOOKUP_FILE_SIZE || "true").toLowerCase() !== "false";
+    (process.env.XIAOYA_LOOKUP_FILE_SIZE || "false").toLowerCase() === "true";
   private readonly sizeLookupConcurrency = readPositiveInteger(
     process.env.XIAOYA_SIZE_LOOKUP_CONCURRENCY,
     6,
@@ -60,6 +60,11 @@ export class XiaoyaService {
     process.env.XIAOYA_DOWNLOAD_LINK_TIMEOUT_MS,
     30000,
     1000
+  );
+  private readonly downloadLinkConcurrency = readPositiveInteger(
+    process.env.XIAOYA_DOWNLOAD_LINK_CONCURRENCY,
+    1,
+    1
   );
   private readonly folderScanMaxDepth = readPositiveInteger(
     process.env.XIAOYA_FOLDER_SCAN_MAX_DEPTH,
@@ -148,7 +153,7 @@ export class XiaoyaService {
 
     const headers = this.createAria2Headers();
 
-    return mapWithConcurrency(resources, this.sizeLookupConcurrency, async (resource) => {
+    return mapWithConcurrency(resources, this.downloadLinkConcurrency, async (resource) => {
       const output = this.createDownloadOutput(resource.path);
       const fileInfo = await this.fetchFileInfo(resource.path, this.downloadLinkTimeoutMs);
       const url = this.resolveRawDownloadUrl(fileInfo.raw_url, resource.path);

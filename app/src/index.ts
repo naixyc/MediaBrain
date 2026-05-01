@@ -65,6 +65,9 @@ const server = createServer(async (request, response) => {
           "GET /ui",
           "POST /task/create",
           "GET /task/:taskId",
+          "POST /task/:taskId/confirm",
+          "POST /task/:taskId/retry",
+          "POST /task/:taskId/cancel",
           "GET /tasks",
           "GET /openlist/me",
           "GET /xiaoya/me",
@@ -117,6 +120,33 @@ const server = createServer(async (request, response) => {
 
       sendJson(response, 200, task);
       return;
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/task/")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const taskId = parts[1] ? decodeURIComponent(parts[1]) : "";
+      const action = parts[2] || "";
+
+      try {
+        if (action === "confirm") {
+          sendJson(response, 202, taskOrchestrator.confirmTask(taskId));
+          return;
+        }
+
+        if (action === "retry") {
+          sendJson(response, 202, taskOrchestrator.retryTask(taskId));
+          return;
+        }
+
+        if (action === "cancel") {
+          sendJson(response, 202, await taskOrchestrator.cancelTask(taskId));
+          return;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        sendJson(response, 400, { error: message });
+        return;
+      }
     }
 
     if (request.method === "GET" && url.pathname === "/openlist/me") {

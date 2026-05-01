@@ -12,6 +12,7 @@ import type {
   ResourceSearchItem,
   OpenListResource,
   ResourceWithSubtitles,
+  TaskPreflightSummary,
   TaskSnapshot,
   TaskStatus
 } from "../types";
@@ -33,9 +34,17 @@ interface MediaTask {
   finalVideoPaths?: string[];
   finalSubtitlePaths?: string[];
   error?: string;
+  cancelRequested?: boolean;
+  downloadGids?: string[];
   createdAt: string;
   updatedAt: string;
   pipeline?: Promise<void>;
+}
+
+class TaskCancelledError extends Error {
+  constructor(taskId: string) {
+    super(`task ${taskId} was cancelled`);
+  }
 }
 
 export class TaskOrchestrator {
@@ -98,7 +107,7 @@ export class TaskOrchestrator {
     };
 
     this.tasks.set(task.taskId, task);
-    this.startSelectedTask(task, selectedResource);
+    this.prepareSelectedTask(task, selectedResource);
 
     console.log(
       `[TaskOrchestrator] task ${task.taskId} created from selected resource ${selectedResource.name}`
@@ -119,8 +128,52 @@ export class TaskOrchestrator {
       throw new Error(`resource ${resourceId} not found in task ${task.taskId}`);
     }
 
-    this.startSelectedTask(task, selectedResource);
+    this.prepareSelectedTask(task, selectedResource);
 
+    return this.toSnapshot(task);
+  }
+
+  confirmTask(taskId: string): TaskSnapshot {
+    const task = this.requireTask(taskId);
+    if (task.status !== "等待确认") {
+      throw new Error(`task ${task.taskId} is not waiting for confirmation`);
+    }
+
+    this.startSelectedTask(task);
+    return this.toSnapshot(task);
+  }
+
+  retryTask(taskId: string): TaskSnapshot {
+    const task = this.requireTask(taskId);
+    if (task.status !== "失败") {
+      throw new Error(`task ${task.taskId} is not failed`);
+    }
+
+    if (!task.selectedResource) {
+      throw new Error(`task ${task.taskId} has no selected resource`);
+    }
+
+    this.startSelectedTask(task);
+    return this.toSnapshot(task);
+  }
+
+  async cancelTask(taskId: string): Promise<TaskSnapshot> {
+    const task = this.requireTask(taskId);
+    if (task.status === "已完成" || task.status === "已取消") {
+      return this.toSnapshot(task);
+    }
+
+    task.cancelRequested = true;
+    task.error = undefined;
+
+    const gids = task.downloadGids || [];
+    if (gids.length > 0) {
+      await this.aria2Service.cancelDownloads(gids).catch((error) => {
+        console.log(`[TaskOrchestrator] task ${task.taskId} cancel downloads failed: ${formatError(error)}`);
+      });
+    }
+
+    this.updateStatus(task, "已取消");
     return this.toSnapshot(task);
   }
 
@@ -149,6 +202,7 @@ export class TaskOrchestrator {
     console.log(
       `[TaskOrchestrator] task ${task.taskId} selected videos: ${selectedVideos.length}, subtitles: ${selected.subtitles.length}`
     );
+    this.assertTaskActive(task);
 
     let downloadTargets: DownloadTarget[];
     let sourcePathByResourceId = new Map<string, string>();
@@ -160,12 +214,14 @@ export class TaskOrchestrator {
       task.videoTargetPaths = selectedVideos.map((video) => video.path);
       task.subtitleTargetPaths = selected.subtitles.map((subtitle) => subtitle.path);
       downloadTargets = await this.mediaResourceService.createDirectDownloadTargets(selectedFiles);
+      this.assertTaskActive(task);
     } else {
       this.updateStatus(task, "转存中");
       const files = selectedFiles.map((resource) => ({
         path: resource.path
       }));
       const transferPaths = await this.transferService.transferFiles(files);
+      this.assertTaskActive(task);
       sourcePathByResourceId = new Map(
         selectedFiles.map((resource, index) => [resource.id, transferPaths[index] || resource.path])
       );
@@ -182,10 +238,12 @@ export class TaskOrchestrator {
       );
 
       downloadTargets = await this.transferService.createDownloadTargets(transferPaths);
+      this.assertTaskActive(task);
     }
 
     this.updateStatus(task, "下载中");
     const gids = await this.aria2Service.addDownloads(downloadTargets);
+    task.downloadGids = gids;
     task.downloadProgress = gids.map((gid, index) => ({
       gid,
       sourcePath: downloadTargets[index]?.sourcePath || "",
@@ -197,11 +255,13 @@ export class TaskOrchestrator {
       progress: 0
     }));
     console.log(`[TaskOrchestrator] task ${task.taskId} aria2 gids: ${gids.join(", ")}`);
+    this.assertTaskActive(task);
 
     const downloadPaths = await this.aria2Service.waitForDownloads(gids, downloadTargets, (progress) => {
       task.downloadProgress = mergeDownloadProgress(task.downloadProgress || [], progress);
       task.updatedAt = new Date().toISOString();
     });
+    this.assertTaskActive(task);
     task.downloadPaths = downloadPaths;
     console.log(
       `[TaskOrchestrator] task ${task.taskId} downloads completed: ${downloadPaths.join(", ")}`
@@ -215,6 +275,7 @@ export class TaskOrchestrator {
 
     for (let index = 0; index < selectedVideos.length; index += 1) {
       const video = selectedVideos[index];
+      this.assertTaskActive(task);
       const videoDownloadPath = downloadPathByResourceId.get(video.id);
       if (!videoDownloadPath) {
         throw new Error(`download path missing for ${video.name}`);
@@ -243,6 +304,7 @@ export class TaskOrchestrator {
         toPath: finalTargetPath,
         subtitlePaths: subtitleDownloadPaths
       });
+      this.assertTaskActive(task);
 
       finalVideoPaths.push(renameResult.videoPath);
       finalSubtitlePaths.push(...renameResult.subtitlePaths);
@@ -262,9 +324,23 @@ export class TaskOrchestrator {
     });
   }
 
-  private startSelectedTask(task: MediaTask, selectedResource: ResourceWithSubtitles): void {
+  private prepareSelectedTask(task: MediaTask, selectedResource: ResourceWithSubtitles): void {
     task.selectedResourceId = selectedResource.id;
     task.selectedResource = selectedResource;
+    task.error = undefined;
+    task.cancelRequested = false;
+    this.clearRunState(task);
+    this.updateStatus(task, "等待确认");
+  }
+
+  private startSelectedTask(task: MediaTask): void {
+    if (!task.selectedResource) {
+      throw new Error(`task ${task.taskId} has no selected resource`);
+    }
+
+    task.error = undefined;
+    task.cancelRequested = false;
+    this.clearRunState(task);
     this.updateStatus(task, "已选择资源");
 
     task.pipeline = this.deferPipeline(task.taskId).catch((error) => {
@@ -273,9 +349,26 @@ export class TaskOrchestrator {
         return;
       }
 
+      if (currentTask.cancelRequested || error instanceof TaskCancelledError) {
+        this.updateStatus(currentTask, "已取消");
+        return;
+      }
+
       currentTask.error = error instanceof Error ? error.message : String(error);
       this.updateStatus(currentTask, "失败");
     });
+  }
+
+  private clearRunState(task: MediaTask): void {
+    task.videoTargetPath = undefined;
+    task.videoTargetPaths = undefined;
+    task.subtitleTargetPaths = undefined;
+    task.downloadPaths = undefined;
+    task.downloadProgress = undefined;
+    task.downloadGids = undefined;
+    task.finalVideoPath = undefined;
+    task.finalVideoPaths = undefined;
+    task.finalSubtitlePaths = undefined;
   }
 
   private createCandidateItems(candidateGroups: ResourceWithSubtitles[]): ResourceSearchItem[] {
@@ -323,6 +416,21 @@ export class TaskOrchestrator {
     return matchingTasks[0];
   }
 
+  private requireTask(taskId: string): MediaTask {
+    const task = this.tasks.get(taskId);
+    if (!task) {
+      throw new Error(`task ${taskId} not found`);
+    }
+
+    return task;
+  }
+
+  private assertTaskActive(task: MediaTask): void {
+    if (task.cancelRequested || task.status === "已取消") {
+      throw new TaskCancelledError(task.taskId);
+    }
+  }
+
   private updateStatus(task: MediaTask, status: TaskStatus): void {
     task.status = status;
     task.updatedAt = new Date().toISOString();
@@ -340,6 +448,7 @@ export class TaskOrchestrator {
       status: task.status,
       candidates: task.candidates,
       selectedResourceId: task.selectedResourceId,
+      preflight: task.selectedResource ? createPreflightSummary(task.selectedResource) : undefined,
       videoTargetPath: task.videoTargetPath,
       videoTargetPaths: task.videoTargetPaths,
       subtitleTargetPaths: task.subtitleTargetPaths,
@@ -376,4 +485,31 @@ function dedupeResources(resources: OpenListResource[]): OpenListResource[] {
 
 function sumResourceSizes(resources: { size: number }[]): number {
   return resources.reduce((total, resource) => total + (Number(resource.size) || 0), 0);
+}
+
+function createPreflightSummary(resource: ResourceWithSubtitles): TaskPreflightSummary {
+  const selectedVideos = resource.videos.length > 0 ? resource.videos : [resource.video];
+  const selectedFiles = dedupeResources([...selectedVideos, ...resource.subtitles]);
+  const sizeBytes = sumResourceSizes(selectedFiles);
+  const sizeKnown = selectedFiles.length > 0 && selectedFiles.every((item) => Number(item.size || 0) > 0);
+  const provider = resource.video.provider;
+  const warning =
+    provider === "xiaoya"
+      ? "确认下载后才会获取 XiaoYa 直链；115 分享源可能在该步骤触发接收。"
+      : undefined;
+
+  return {
+    provider,
+    fileCount: selectedFiles.length,
+    videoCount: selectedVideos.length,
+    subtitleCount: resource.subtitles.length,
+    size: sizeKnown ? formatFileSize(sizeBytes) : "未知大小",
+    sizeBytes,
+    sizeKnown,
+    warning
+  };
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

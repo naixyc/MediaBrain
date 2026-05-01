@@ -366,6 +366,47 @@ export function renderUiPage(): string {
       overflow-wrap: anywhere;
     }
 
+    .task-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .task-action {
+      min-height: 32px;
+      border-radius: 8px;
+      padding: 0 12px;
+      background: #e2e8f0;
+      color: #172033;
+      font-size: 12px;
+      font-weight: 800;
+      transition: background 160ms ease, transform 160ms ease;
+    }
+
+    .task-action:hover:not(:disabled) {
+      background: #cbd5e1;
+      transform: translateY(-1px);
+    }
+
+    .task-action.primary {
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    .task-action.primary:hover:not(:disabled) {
+      background: var(--accent-strong);
+    }
+
+    .task-action.danger {
+      background: #fee2e2;
+      color: var(--red);
+    }
+
+    .task-action.danger:hover:not(:disabled) {
+      background: #fecaca;
+    }
+
     .task-summary {
       display: grid;
       gap: 7px;
@@ -940,7 +981,8 @@ export function renderUiPage(): string {
         embyServers: [],
         polling: null,
         searching: false,
-        selectingId: null
+        selectingId: null,
+        actingTaskIds: {}
       };
 
       var els = {
@@ -980,6 +1022,7 @@ export function renderUiPage(): string {
       };
 
       var STATUS_WAITING = "\u7b49\u5f85\u9009\u62e9\u8d44\u6e90";
+      var STATUS_WAITING_CONFIRM = "\u7b49\u5f85\u786e\u8ba4";
       var STATUS_SELECTED = "\u5df2\u9009\u62e9\u8d44\u6e90";
       var STATUS_TRANSFERRING = "\u8f6c\u5b58\u4e2d";
       var STATUS_DOWNLOADING = "\u4e0b\u8f7d\u4e2d";
@@ -987,6 +1030,7 @@ export function renderUiPage(): string {
       var STATUS_DONE = "\u5df2\u5b8c\u6210";
       var STATUS_FAILED = "\u5931\u8d25";
       var STATUS_ORGANIZE_FAILED = "\u6574\u7406\u5931\u8d25";
+      var STATUS_CANCELED = "\u5df2\u53d6\u6d88";
       var activeStatuses = [STATUS_SELECTED, STATUS_TRANSFERRING, STATUS_DOWNLOADING];
 
       function escapeHtml(value) {
@@ -1031,7 +1075,8 @@ export function renderUiPage(): string {
         if (status === STATUS_DONE || status === STATUS_DOWNLOAD_DONE) return "green";
         if (status === STATUS_FAILED || status === STATUS_ORGANIZE_FAILED) return "red";
         if (status === STATUS_DOWNLOADING) return "blue";
-        if (status === STATUS_TRANSFERRING || status === STATUS_SELECTED) return "amber";
+        if (status === STATUS_TRANSFERRING || status === STATUS_SELECTED || status === STATUS_WAITING_CONFIRM) return "amber";
+        if (status === STATUS_CANCELED) return "";
         return "violet";
       }
 
@@ -1179,9 +1224,9 @@ export function renderUiPage(): string {
       }
 
       function selectionActionLabel(item) {
-        if (item.kind === "collection") return "\u4e0b\u8f7d\u5168\u96c6";
-        if (item.kind === "season") return "\u4e0b\u8f7d\u6574\u5b63";
-        return "\u4e0b\u8f7d\u5355\u96c6";
+        if (item.kind === "collection") return "\u9884\u68c0\u5168\u96c6";
+        if (item.kind === "season") return "\u9884\u68c0\u6574\u5b63";
+        return "\u9884\u68c0\u5355\u96c6";
       }
 
       function renderCandidates() {
@@ -1329,6 +1374,51 @@ export function renderUiPage(): string {
         '</div>';
       }
 
+      function renderPreflight(task) {
+        var preflight = task.preflight;
+        if (!preflight) return "";
+
+        var parts = [
+          preflight.fileCount + " \u4e2a\u6587\u4ef6",
+          preflight.videoCount + " \u4e2a\u89c6\u9891"
+        ];
+        if (preflight.subtitleCount) {
+          parts.push(preflight.subtitleCount + " \u4e2a\u5b57\u5e55");
+        }
+        if (preflight.provider) {
+          parts.push(sourceProviderLabel(preflight.provider));
+        }
+
+        var warning = preflight.warning
+          ? '<div class="progress-muted">' + escapeHtml(preflight.warning) + '</div>'
+          : '';
+
+        return '<div class="task-summary">' +
+          '<div class="summary-row">' +
+            '<div class="summary-main">' + escapeHtml(parts.join(" \u00b7 ")) + '</div>' +
+            '<div class="summary-side">' + escapeHtml(preflight.size || "\u672a\u77e5\u5927\u5c0f") + '</div>' +
+          '</div>' +
+          warning +
+        '</div>';
+      }
+
+      function renderTaskActions(task) {
+        var buttons = [];
+        var disabled = state.actingTaskIds[task.taskId] ? " disabled" : "";
+
+        if (task.status === STATUS_WAITING_CONFIRM) {
+          buttons.push('<button class="task-action primary" type="button" data-task-action="confirm" data-task-id="' + escapeHtml(task.taskId) + '"' + disabled + '>\u786e\u8ba4\u4e0b\u8f7d</button>');
+          buttons.push('<button class="task-action danger" type="button" data-task-action="cancel" data-task-id="' + escapeHtml(task.taskId) + '"' + disabled + '>\u53d6\u6d88\u4efb\u52a1</button>');
+        } else if (task.status === STATUS_FAILED) {
+          buttons.push('<button class="task-action primary" type="button" data-task-action="retry" data-task-id="' + escapeHtml(task.taskId) + '"' + disabled + '>\u91cd\u8bd5</button>');
+          buttons.push('<button class="task-action danger" type="button" data-task-action="cancel" data-task-id="' + escapeHtml(task.taskId) + '"' + disabled + '>\u53d6\u6d88\u4efb\u52a1</button>');
+        } else if (activeStatuses.indexOf(task.status) !== -1) {
+          buttons.push('<button class="task-action danger" type="button" data-task-action="cancel" data-task-id="' + escapeHtml(task.taskId) + '"' + disabled + '>\u53d6\u6d88\u4efb\u52a1</button>');
+        }
+
+        return buttons.length ? '<div class="task-actions">' + buttons.join("") + '</div>' : "";
+      }
+
       function renderTasks() {
         var tasks = state.tasks.filter(function (task) {
           return task.selectedResourceId || task.status !== STATUS_WAITING;
@@ -1346,6 +1436,8 @@ export function renderUiPage(): string {
           var selectedCandidate = getSelectedCandidate(task);
           var selected = selectedCandidate ? selectedCandidate.name : task.selectedResourceId || "";
           var progressMarkup = renderDownloadProgress(task, task.downloadProgress || [], selectedCandidate);
+          var preflightMarkup = renderPreflight(task);
+          var actionMarkup = renderTaskActions(task);
 
           return '<article class="task-item">' +
             '<div class="task-head">' +
@@ -1355,7 +1447,9 @@ export function renderUiPage(): string {
               '</div>' +
               '<span class="pill ' + statusClass(displayStatus) + '">' + escapeHtml(displayStatus) + '</span>' +
             '</div>' +
+            preflightMarkup +
             progressMarkup +
+            actionMarkup +
             '<div class="task-sub">' + escapeHtml(formatDate(task.updatedAt)) + '</div>' +
           '</article>';
         }).join("");
@@ -1759,7 +1853,11 @@ export function renderUiPage(): string {
             state.currentCandidates = Array.isArray(task.candidates) ? task.candidates : state.currentCandidates;
             syncTask(task);
             renderAll();
-            startPolling();
+            if (activeStatuses.indexOf(task.status) !== -1) {
+              startPolling();
+            } else {
+              stopPolling();
+            }
           })
           .catch(function (error) {
             addError(error.message);
@@ -1767,6 +1865,33 @@ export function renderUiPage(): string {
           .finally(function () {
             state.selectingId = null;
             renderCandidates();
+          });
+      }
+
+      function runTaskAction(taskId, action) {
+        if (!taskId || !action || state.actingTaskIds[taskId]) return;
+
+        state.actingTaskIds[taskId] = true;
+        renderTasks();
+
+        return requestJson("/task/" + encodeURIComponent(taskId) + "/" + encodeURIComponent(action), {
+          method: "POST"
+        })
+          .then(function (task) {
+            syncTask(task);
+            renderAll();
+            if (activeStatuses.indexOf(task.status) !== -1) {
+              startPolling();
+            } else {
+              stopPolling();
+            }
+          })
+          .catch(function (error) {
+            addError(error.message);
+          })
+          .finally(function () {
+            delete state.actingTaskIds[taskId];
+            renderTasks();
           });
       }
 
@@ -1795,6 +1920,15 @@ export function renderUiPage(): string {
       els.taskList.addEventListener("click", function (event) {
         var target = event.target;
         if (!(target instanceof HTMLElement)) return;
+        var actionButton = target.closest("[data-task-action]");
+        if (actionButton) {
+          runTaskAction(
+            actionButton.getAttribute("data-task-id"),
+            actionButton.getAttribute("data-task-action")
+          );
+          return;
+        }
+
         var button = target.closest("[data-toggle-task]");
         if (!button) return;
         var taskId = button.getAttribute("data-toggle-task");

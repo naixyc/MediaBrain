@@ -77,6 +77,17 @@ export interface ResourceSearchItem {
   subtitlesCount: number;
 }
 
+export interface TaskPreflightSummary {
+  provider?: ResourceProvider;
+  fileCount: number;
+  videoCount: number;
+  subtitleCount: number;
+  size: string;
+  sizeBytes: number;
+  sizeKnown: boolean;
+  warning?: string;
+}
+
 export interface TransferTarget {
   path: string;
 }
@@ -106,11 +117,13 @@ export interface DownloadProgress {
 
 export type TaskStatus =
   | "等待选择资源"
+  | "等待确认"
   | "已选择资源"
   | "转存中"
   | "下载中"
   | "已完成"
-  | "失败";
+  | "失败"
+  | "已取消";
 
 export interface TaskSnapshot {
   taskId: string;
@@ -118,6 +131,7 @@ export interface TaskSnapshot {
   status: TaskStatus;
   candidates: ResourceSearchItem[];
   selectedResourceId?: string;
+  preflight?: TaskPreflightSummary;
   videoTargetPath?: string;
   videoTargetPaths?: string[];
   subtitleTargetPaths?: string[];
